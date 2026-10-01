@@ -39,6 +39,8 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
   function json(res,status,value){if(res.writableEnded)return;res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
   async function body(req){let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;if(size>MAX_BODY)throw Object.assign(Error('Request is too large'),{status:413});chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}}
   function browserSession(req){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('anywhere_session='))?.slice(17);const entry=token&&state.browserSessions[hash(token)];return entry&&entry.expiresAt>clock()?entry:null;}
+  // Behind a reverse proxy on this machine, rate limits follow the forwarded client address.
+  function clientAddress(req){const remote=req.socket.remoteAddress||'unknown';const forwarded=String(req.headers['x-forwarded-for']||'').split(',')[0].trim();return ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(remote)&&forwarded?forwarded:remote;}
   function checkOrigin(req){const expected=config.publicOrigin||`http://${req.headers.host}`;return !req.headers.origin||req.headers.origin===expected;}
   function requireAuth(req,res,mutating=false){const session=browserSession(req);if(!session){json(res,401,{error:'Please sign in to your launcher.'});return null;}if(mutating&&(!checkOrigin(req)||!eq(req.headers['x-csrf-token'],session.csrf))){json(res,403,{error:'Refresh the page and try again.'});return null;}return session;}
   const OSES=['linux','wsl','windows'];
@@ -124,7 +126,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       }
       if(route==='/api/login'&&req.method==='POST'){
         if(!checkOrigin(req)){json(res,403,{error:'Invalid request origin'});return;}
-        const ip=req.socket.remoteAddress||'unknown';const attempts=(loginAttempts.get(ip)||[]).filter(t=>clock()-t<15*60000);if(attempts.length>=12){json(res,429,{error:'Too many sign-in attempts. Try again in 15 minutes.'});return;}
+        const ip=clientAddress(req);const attempts=(loginAttempts.get(ip)||[]).filter(t=>clock()-t<15*60000);if(attempts.length>=12){json(res,429,{error:'Too many sign-in attempts. Try again in 15 minutes.'});return;}
         const input=await body(req);if(!eq(hash(input.token||''),config.loginTokenHash)){attempts.push(clock());loginAttempts.set(ip,attempts);json(res,401,{error:'That access key is not correct.'});return;}
         loginAttempts.delete(ip);const token=opaque(),csrf=opaque();state.browserSessions[hash(token)]={csrf,expiresAt:clock()+30*86400000};save(true);
         res.setHeader('Set-Cookie',`anywhere_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000${config.publicOrigin?.startsWith('https:')?'; Secure':''}`);json(res,200,{ok:true,csrfToken:csrf});return;

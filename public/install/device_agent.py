@@ -371,6 +371,20 @@ class ConsentGate:
         return prompts
 
 
+def local_host(host):
+    """Plain http is only allowed to this machine or a private (LAN) address."""
+    import ipaddress
+    if not host:
+        return False
+    if host in ("localhost",) or host.endswith((".local", ".lan", ".home.arpa")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private
+
+
 def terminate_tree(identity, grace=5.0):
     """Stop a verified process and its descendants; never acts on a reused PID."""
     if not owned(identity):
@@ -427,7 +441,7 @@ class DeviceAgent:
         parsed = urllib.parse.urlsplit(self.hub)
         if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ("", "/"):
             raise AgentError("configuration", "hubUrl must be the HTTPS origin without credentials or a path.")
-        if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1", "::1") and self.config.get("allowLocalHttp") is True):
+        if parsed.scheme != "https" and not (parsed.scheme == "http" and local_host(parsed.hostname) and self.config.get("allowLocalHttp") is True):
             raise AgentError("configuration", "The hub requires HTTPS. Local HTTP must be explicitly enabled for local tests.")
         self.policy = PathPolicy(self.config.get("roots"))
         self.label = self.config.get("label", self.device_id)

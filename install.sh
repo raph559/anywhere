@@ -2,8 +2,12 @@
 # Anywhere hub installer. Installs or updates the hub on a Linux server (run as root):
 #   curl -fsSL https://github.com/raph559/anywhere/releases/latest/download/install.sh | sudo sh
 # Re-running it updates the app and keeps your configuration, devices and sessions.
-# Options (environment): ANYWHERE_ORIGIN (HTTPS address, if you don't use Tailscale Serve),
-# ANYWHERE_TARBALL (local release archive), ANYWHERE_NO_SYSTEMD=1 (don't install the service).
+# How you reach it is chosen on first install (asked if not set):
+#   Tailscale (detected automatically)            private HTTPS inside your tailnet
+#   ANYWHERE_DOMAIN=anywhere.example.com           automatic HTTPS with Caddy (ports 80/443 free)
+#   ANYWHERE_ORIGIN=https://your-address           your own reverse proxy to 127.0.0.1:18250
+#   ANYWHERE_LAN=1                                 plain http://<this server's IP>:18250 on your local network
+# Other options: ANYWHERE_TARBALL (local release archive), ANYWHERE_NO_SYSTEMD=1 (don't install the service).
 set -eu
 REPO=raph559/anywhere; APP=/opt/anywhere; ETC=/etc/anywhere; DATA=/var/lib/anywhere; PORT=18250; HTTPS_PORT=8443
 say() { printf '\033[1;33m›\033[0m %s\n' "$*"; }
@@ -36,25 +40,63 @@ find "$APP/hub" "$APP/public" -type d -exec chmod 755 {} +; find "$APP/hub" "$AP
 id anywhere >/dev/null 2>&1 || useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin anywhere
 install -d -o anywhere -g anywhere -m 700 "$DATA"; install -d -m 750 "$ETC"; chown root:anywhere "$ETC"
 
-# Private HTTPS address: Tailscale Serve when available.
-ORIGIN=${ANYWHERE_ORIGIN:-}
-if [ -z "$ORIGIN" ] && command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then
+# How the app is reached. Only decided on first install; updates keep the existing choice.
+ORIGIN=${ANYWHERE_ORIGIN:-}; DOMAIN=${ANYWHERE_DOMAIN:-}; LAN=${ANYWHERE_LAN:-}; LISTEN=127.0.0.1
+setup_tailscale() {
   NAME=$(tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
   ORIGIN=https://$NAME:$HTTPS_PORT
   tailscale serve --bg --https=$HTTPS_PORT http://127.0.0.1:$PORT >/dev/null || die "tailscale serve failed (enable HTTPS certificates for your tailnet in the Tailscale admin console)."
+}
+setup_domain() {
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -Eq '[:.](80|443)$'; then
+    command -v caddy >/dev/null && grep -qs "anywhere" /etc/caddy/Caddyfile || die "Ports 80/443 are already used on this server. Point your existing web server to 127.0.0.1:$PORT and re-run with ANYWHERE_ORIGIN=https://$DOMAIN"
+  fi
+  if ! command -v caddy >/dev/null; then
+    command -v apt-get >/dev/null || die "Automatic HTTPS needs Caddy; install it (https://caddyserver.com/docs/install) and re-run."
+    say "Installing Caddy for automatic HTTPS"; apt-get install -y -qq caddy >/dev/null
+  fi
+  if [ -s /etc/caddy/Caddyfile ] && ! grep -qs "The Caddyfile is an easy way" /etc/caddy/Caddyfile && ! grep -qs "anywhere" /etc/caddy/Caddyfile; then
+    die "/etc/caddy/Caddyfile already has a configuration. Add this block yourself, then re-run with ANYWHERE_ORIGIN=https://$DOMAIN:
+  $DOMAIN { reverse_proxy 127.0.0.1:$PORT }"
+  fi
+  printf '# Anywhere\n%s {\n\treverse_proxy 127.0.0.1:%s\n}\n' "$DOMAIN" "$PORT" > /etc/caddy/Caddyfile
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+  ORIGIN=https://$DOMAIN
+}
+setup_lan() {
+  IP=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$IP" ] || die "Could not find this server's local IP address."
+  ORIGIN=http://$IP:$PORT; LISTEN=0.0.0.0
+}
+if [ ! -f "$ETC/config.json" ] && [ -z "$ORIGIN" ]; then
+  if [ -n "$DOMAIN" ]; then setup_domain
+  elif [ "$LAN" = 1 ]; then setup_lan
+  elif command -v tailscale >/dev/null && tailscale status >/dev/null 2>&1; then setup_tailscale
+  elif ( : < /dev/tty ) 2>/dev/null; then
+    printf '\nHow will you open Anywhere?\n  1) A domain name pointing to this server (automatic HTTPS)\n  2) My own reverse proxy (nginx, Traefik, Cloudflare Tunnel…)\n  3) Only on my local network (http, no HTTPS)\nChoice [1-3]: ' > /dev/tty
+    read -r CHOICE < /dev/tty
+    case "$CHOICE" in
+      1) printf 'Domain name (e.g. anywhere.example.com): ' > /dev/tty; read -r DOMAIN < /dev/tty; [ -n "$DOMAIN" ] || die "No domain given."; setup_domain;;
+      2) printf 'Public address of your proxy (https://…): ' > /dev/tty; read -r ORIGIN < /dev/tty; [ -n "$ORIGIN" ] || die "No address given."
+         say "Point your proxy to http://127.0.0.1:$PORT";;
+      3) setup_lan;;
+      *) die "Unknown choice.";;
+    esac
+  else
+    die "Tell the installer how Anywhere will be reached: ANYWHERE_DOMAIN=…, ANYWHERE_ORIGIN=…, or ANYWHERE_LAN=1 (see the README)."
+  fi
 fi
+[ -f "$ETC/config.json" ] && LISTEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("listen", "127.0.0.1"))' "$ETC/config.json")
 
 KEY_FILE=/root/.config/anywhere-signing/agent-ed25519.pem
 FIRST=0
 if [ ! -f "$ETC/config.json" ]; then
-  [ -n "$ORIGIN" ] || die "No Tailscale found. Re-run with ANYWHERE_ORIGIN=https://your-private-address (served by your reverse proxy to 127.0.0.1:$PORT)."
   FIRST=1
   ACCESS_KEY=$(openssl rand -base64 36 | tr -d '=+/' | cut -c1-32)
   [ -f "$KEY_FILE" ] || ANYWHERE_SIGNING_KEY=$KEY_FILE python3 "$APP/deploy/publish-agent.py" --init-key >/dev/null
   PUBLIC_KEY=$(openssl pkey -in "$KEY_FILE" -pubout -outform DER | tail -c 32 | base64)
-  ORIGIN=$ORIGIN PORT=$PORT HASH=$(printf '%s' "$ACCESS_KEY" | sha256sum | cut -d' ' -f1) PUBLIC_KEY=$PUBLIC_KEY python3 - "$ETC/config.json" <<'PY'
+  ORIGIN=$ORIGIN LISTEN=$LISTEN PORT=$PORT HASH=$(printf '%s' "$ACCESS_KEY" | sha256sum | cut -d' ' -f1) PUBLIC_KEY=$PUBLIC_KEY python3 - "$ETC/config.json" <<'PY'
 import json, os, sys
-config = {"publicOrigin": os.environ["ORIGIN"], "port": int(os.environ["PORT"]), "loginTokenHash": os.environ["HASH"],
+config = {"publicOrigin": os.environ["ORIGIN"].rstrip("/"), "listen": os.environ["LISTEN"], "port": int(os.environ["PORT"]), "loginTokenHash": os.environ["HASH"],
           "updatePublicKey": os.environ["PUBLIC_KEY"], "ownerName": "", "devices": []}
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f: json.dump(config, f, indent=2)
@@ -74,7 +116,7 @@ Wants=network-online.target
 User=anywhere
 Group=anywhere
 WorkingDirectory=$APP
-Environment=HOST=127.0.0.1
+Environment=HOST=$LISTEN
 Environment=PORT=$PORT
 Environment=LAUNCHER_CONFIG=$ETC/config.json
 Environment=LAUNCHER_STATE=$DATA/state.json
@@ -98,4 +140,5 @@ fi
 ORIGIN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["publicOrigin"])' "$ETC/config.json")
 printf '\n\033[1;32m✓ Anywhere is running.\033[0m\n\n  Open:        %s\n' "$ORIGIN"
 if [ "$FIRST" = 1 ]; then printf '  Access key:  %s   (shown once; keep it in your password manager)\n' "$ACCESS_KEY"; fi
-printf '\n  Next: sign in, then use "Add a device" in the sidebar for each computer or server.\n\n'
+case "$ORIGIN" in http://*) printf '\n  Note: plain http works on your local network only, and phones cannot install it as an app.\n';; esac
+printf '\n  Next: sign in, then use "+ Add" next to Devices for each computer or server.\n\n'

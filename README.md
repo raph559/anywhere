@@ -39,7 +39,7 @@ Claude Code's [Remote Control](https://docs.claude.com/en/docs/claude-code) lets
 
 ## Install
 
-You need a Linux server with [Tailscale](https://tailscale.com) (free), and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and signed in on each machine you want to use.
+You need a Linux server (any small VPS or home server) and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and signed in on each machine you want to use.
 
 ### 1 · Install the hub on your server
 
@@ -47,14 +47,33 @@ You need a Linux server with [Tailscale](https://tailscale.com) (free), and [Cla
 curl -fsSL https://github.com/raph559/anywhere/releases/latest/download/install.sh | sudo sh
 ```
 
-It installs everything (including Node.js if needed), sets up a private HTTPS address on your tailnet, and prints:
+It installs everything (Node.js included if needed) and asks how you'll open the app:
+
+| Option | You get | Good for |
+|---|---|---|
+| **Tailscale** — picked automatically if installed | `https://server.your-tailnet.ts.net:8443`, private to your devices | the easiest private setup |
+| **A domain name** | `https://anywhere.example.com`, HTTPS set up for you (Caddy) | reaching it from anywhere |
+| **Your own reverse proxy** | whatever address you use (nginx, Traefik, Cloudflare Tunnel…) | servers that already host websites |
+| **Local network only** | `http://192.168.1.20:18250` | trying it out at home |
+
+Then it prints the address and your access key:
 
 ```
 ✓ Anywhere is running.
 
-  Open:        https://your-server.your-tailnet.ts.net:8443
+  Open:        https://anywhere.example.com
   Access key:  3kP9…          (shown once; keep it in your password manager)
 ```
+
+<details>
+<summary>Non-interactive install</summary>
+
+```sh
+curl -fsSL …/install.sh | sudo ANYWHERE_DOMAIN=anywhere.example.com sh   # domain + automatic HTTPS
+curl -fsSL …/install.sh | sudo ANYWHERE_ORIGIN=https://my-address sh     # your own proxy → 127.0.0.1:18250
+curl -fsSL …/install.sh | sudo ANYWHERE_LAN=1 sh                          # local network, plain http
+```
+</details>
 
 ### 2 · Add your machines from the app
 
@@ -69,14 +88,14 @@ The machine appears online a few seconds later, and its agent starts automatical
 
 ### 3 · On your phone
 
-Open the same address (with Tailscale on), sign in, then **Share → Add to Home Screen**.
+Open the same address on your phone, sign in, then **Share → Add to Home Screen** (needs an HTTPS address).
 
 **That's it.** To update later, run the install command again: your settings, devices and sessions are kept, and every machine updates its agent by itself.
 
 ## How it works
 
 ```
-   your phone ──HTTPS (tailnet)──▶  hub  (your server)
+   your phone ────── HTTPS ──────▶  hub  (your server)
                                      ▲
                    outbound only     │   one secret per machine
           ┌──────────────────────────┼──────────────────────────┐
@@ -93,7 +112,8 @@ Open the same address (with Tailscale on), sign in, then **Share → Add to Home
 
 Anywhere can start Claude Code with full permissions on your machines from a web page. Please read this:
 
-- **Keep it private.** The installer only publishes the app inside your tailnet (Tailscale Serve). Don't expose it to the internet.
+- **Prefer a private address.** With Tailscale or a local network, only your own devices can even reach the sign-in page. With a public domain, the sign-in is protected by a long random access key and rate limiting, but it is still reachable by anyone — use a strong setup (HTTPS only, keep the key secret).
+- **Plain http is for local networks only**: traffic, including device secrets, is not encrypted.
 - **Secrets are hashed.** The access key and each machine's secret are stored as SHA-256 hashes. Device codes work once and expire after 30 minutes.
 - **Agents stay in their lane.** They only browse your home folder and only stop the Claude processes they started.
 - **Full auto is powerful.** Claude will edit and run anything on that machine without asking. Use *Ask* or *Accept edits* when in doubt.
@@ -130,13 +150,9 @@ Claude Code on that machine is probably waiting for a sign-in or a setup prompt.
 </details>
 
 <details>
-<summary><b>Can I use it without Tailscale?</b></summary>
+<summary><b>Do I need Tailscale?</b></summary>
 
-Yes, behind any HTTPS reverse proxy on a private network pointing to `127.0.0.1:18250`. Give the installer your address:
-
-```sh
-curl -fsSL https://github.com/raph559/anywhere/releases/latest/download/install.sh | sudo ANYWHERE_ORIGIN=https://your-address sh
-```
+No. It's one option: the installer also supports a domain name with automatic HTTPS, your own reverse proxy, or your local network. See [Install](#install).
 </details>
 
 <details>

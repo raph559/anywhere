@@ -970,6 +970,8 @@ function openQuickStart(key) {
 }
 
 /* ---------- launch ---------- */
+// crypto.randomUUID needs HTTPS; plain-http LAN installs fall back to getRandomValues.
+function newRequestId() { if (typeof crypto.randomUUID === 'function') return crypto.randomUUID(); const bytes = crypto.getRandomValues(new Uint8Array(16)); return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('').replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-'); }
 function askLaunch(request) {
   if (!request || state.launching) return;
   const device = deviceById(request.deviceId);
@@ -987,7 +989,7 @@ async function launch(request) {
   if (!request || state.launching) return;
   const generation = state.authGeneration;
   const attemptKey = JSON.stringify([request.deviceId, request.path, request.permissionMode]);
-  const requestId = state.launchAttempts.get(attemptKey) || crypto.randomUUID();
+  const requestId = state.launchAttempts.get(attemptKey) || newRequestId();
   state.launchAttempts.set(attemptKey, requestId);
   state.launching = true; showError(''); updateLaunchButton();
   try {

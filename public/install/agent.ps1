@@ -35,6 +35,7 @@ catch { throw 'The code was refused. Create a new one in Anywhere (codes expire 
 $config = [ordered]@{ deviceId = $r.deviceId; deviceSecret = $r.deviceSecret; hubUrl = $r.hubUrl; label = $r.label; claudePath = $claude
   roots = @(@{ name = 'Home'; path = $env:USERPROFILE }); defaultPath = $env:USERPROFILE; stateDir = 'state' }
 if ($r.updatePublicKey) { $config.updatePublicKey = $r.updatePublicKey }
+if ($r.hubUrl -like 'http://*') { $config.allowLocalHttp = $true }
 $configPath = Join-Path $dir 'config.json'
 [IO.File]::WriteAllText($configPath, ($config | ConvertTo-Json -Depth 5))
 & $python (Join-Path $dir 'device_agent.py') check --config $configPath | Out-Null
