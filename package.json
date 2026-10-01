@@ -1,0 +1,10 @@
+{
+  "name": "anywhere",
+  "version": "1.0.0",
+  "description": "Start, open and stop Claude Code Remote Control sessions on your own machines from your phone.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node hub/server.mjs" },
+  "engines": { "node": ">=22" }
+}

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#262624" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#faf9f5" media="(prefers-color-scheme: light)">
+  <meta name="color-scheme" content="dark light">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Anywhere">
+  <meta name="description" content="Start, open and stop Claude Code sessions on your own machines.">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="preload" href="/fonts/source-serif-4-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/styles.css">
+  <title>Anywhere</title>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div id="boot-screen" class="boot-screen"><span class="spark spark-pulse" aria-hidden="true"></span><p>Connecting…</p></div>
+
+  <section id="login-screen" class="login" hidden aria-labelledby="login-title">
+    <div class="login-inner">
+      <span class="spark spark-lg" aria-hidden="true"></span>
+      <h1 id="login-title" class="serif">Welcome back</h1>
+      <p class="login-sub">Start Claude Code on your machines, from anywhere.</p>
+      <form id="login-form" class="login-form">
+        <label for="access-token" class="sr-only">Access key</label>
+        <input id="access-token" name="token" type="password" autocomplete="current-password" placeholder="Access key" required>
+        <button class="btn btn-primary btn-block" type="submit" id="login-submit">Continue</button>
+        <p id="login-error" class="field-error" role="alert" hidden></p>
+      </form>
+      <p class="login-foot">Your Anywhere key is separate from your Claude account.</p>
+    </div>
+  </section>
+
+  <div id="shell" class="shell" hidden>
+    <div id="scrim" class="scrim" aria-hidden="true"></div>
+    <div id="edge-swipe" class="edge-swipe" aria-hidden="true"></div>
+    <aside id="sidebar" class="sidebar" aria-label="Sessions and devices">
+      <div class="sidebar-head">
+        <a class="brand" href="#/" aria-label="Anywhere, new session"><span class="spark" aria-hidden="true"></span><span>Anywhere</span></a>
+        <button class="icon-btn only-mobile" id="close-sidebar" type="button" aria-label="Close menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+      </div>
+      <a class="new-session" href="#/"><span class="plus" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>New session</a>
+      <div class="sidebar-scroll" id="sidebar-scroll">
+        <div class="side-group" id="pinned-group" hidden>
+          <div class="side-label"><button class="side-toggle" type="button" data-collapse="pinned" aria-expanded="true"><svg class="side-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span>Pinned</span></button></div>
+          <div id="pinned-list" class="side-list collapsible"></div>
+        </div>
+        <div class="side-group">
+          <div class="side-label"><span>Devices</span></div>
+          <div id="device-groups" class="device-groups"></div>
+          <div id="hidden-devices" class="hidden-devices" hidden>
+            <div class="side-label"><button class="side-toggle" type="button" data-collapse="hidden" aria-expanded="false"><svg class="side-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span id="hidden-count">Hidden</span></button></div>
+            <div id="hidden-list" class="side-list collapsible"></div>
+          </div>
+        </div>
+        <div class="side-group" id="history-group" hidden>
+          <div class="side-label"><button class="side-toggle" type="button" data-collapse="history" aria-expanded="true"><svg class="side-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span>History</span></button><button class="side-action" id="clear-history" type="button">Clear</button></div>
+          <div id="history-list" class="side-list collapsible"></div>
+        </div>
+      </div>
+      <div class="sidebar-foot">
+        <button class="foot-btn" id="install-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Add to Home Screen</button>
+        <button class="foot-btn" id="logout-button" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/></svg>Sign out</button>
+      </div>
+    </aside>
+
+    <div class="main-col" id="main-col">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="open-sidebar" type="button" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg><span id="menu-badge" class="menu-badge" hidden></span></button>
+        <div class="topbar-title" id="topbar-title">New session</div>
+        <a class="icon-btn only-mobile" id="topbar-new" href="#/" aria-label="New session"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></a>
+      </header>
+      <div id="offline-banner" class="banner" role="status" hidden>You're offline. Reconnect to reach your devices.</div>
+      <p id="global-error" class="banner banner-error" role="alert" hidden></p>
+
+      <main id="main" tabindex="-1">
+        <p id="session-live" class="sr-only" aria-live="polite"></p>
+        <section id="new-view" class="view new-view" aria-labelledby="greeting-text">
+          <div class="greeting-wrap">
+            <h1 id="greeting" class="greeting serif"><span id="greeting-spark" class="spark greeting-spark" aria-hidden="true"></span><span id="greeting-text">Hello</span></h1>
+            <p id="greeting-sub" class="greeting-sub">Where should Claude work?</p>
+          </div>
+
+          <div class="composer" id="composer">
+            <div class="devices-row" role="group" aria-label="Device">
+              <div id="device-chips" class="device-chips"></div>
+            </div>
+            <div id="browser" class="browser" hidden>
+              <div class="browser-bar">
+                <button id="folder-up" class="icon-btn sm" type="button" aria-label="Parent folder" title="Parent folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+                <nav id="breadcrumbs" class="breadcrumbs" aria-label="Folder path"></nav>
+                <button id="refresh-folders" class="icon-btn sm" type="button" aria-label="Refresh folders" title="Refresh"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg></button>
+              </div>
+              <form id="filter-form" class="filter-form" role="search" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+                <label for="folder-filter" class="sr-only">Filter folders</label>
+                <input id="folder-filter" type="search" placeholder="Filter folders" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="go" aria-controls="folder-list">
+              </form>
+              <div id="folder-message" class="folder-message" role="status" hidden></div>
+              <div id="folder-list" class="folder-list"></div>
+              <div id="folder-foot" class="folder-foot" hidden>
+                <span id="folder-truncated" hidden>Showing the first 2,000 folders.</span>
+                <button id="toggle-hidden" class="side-action" type="button" hidden></button>
+              </div>
+            </div>
+            <div id="choose-hint" class="choose-hint">Pick a device to browse its folders.</div>
+            <div class="composer-foot">
+              <form id="path-form" class="path-form">
+                <label for="folder-path" class="sr-only">Folder path</label>
+                <input id="folder-path" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Folder path" enterkeyhint="go" disabled>
+              </form>
+              <label class="mode-pick" title="Permissions for this session"><span class="sr-only">Permissions</span><select id="mode-select"><option value="bypassPermissions">Full auto</option><option value="acceptEdits">Accept edits</option><option value="default">Ask</option></select></label>
+              <button id="launch-button" class="send-btn" type="button" disabled aria-label="Start Claude in this folder"><span class="send-label">Start</span><svg class="send-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span class="spark send-spinner" aria-hidden="true"></span></button>
+            </div>
+          </div>
+
+          <section id="jump" class="jump" hidden aria-labelledby="jump-heading">
+            <h2 id="jump-heading" class="jump-heading">Jump back in</h2>
+            <div id="jump-list" class="jump-list"></div>
+          </section>
+
+          <div id="recent" class="recent" hidden>
+            <span class="recent-label">Recent</span>
+            <div id="recent-list" class="recent-list"></div>
+          </div>
+          <p class="fine-print">Claude runs on the selected device, in the selected folder. Conversations happen in the official Claude app.</p>
+        </section>
+
+        <section id="session-view" class="view session-view" hidden></section>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="trust-dialog" class="dialog">
+    <form method="dialog">
+      <h2 class="serif">Start Claude here?</h2>
+      <p class="dialog-meta" id="trust-device"></p>
+      <code id="trust-path" class="code-block"></code>
+      <p class="dialog-text" id="trust-text"></p>
+      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-primary" value="start">Start session</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="stop-dialog" class="dialog">
+    <form method="dialog">
+      <h2 class="serif">Stop this session?</h2>
+      <p class="dialog-meta" id="stop-device"></p>
+      <code id="stop-path" class="code-block"></code>
+      <p class="dialog-text">Claude will be shut down on that device. Anything it is doing in this folder right now will be interrupted, and its link will stop working. You can start it again later.</p>
+      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-danger" value="stop">Stop session</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="install-dialog" class="dialog">
+    <form method="dialog">
+      <span class="spark spark-lg" aria-hidden="true"></span>
+      <h2 class="serif">Keep Anywhere on your Home Screen</h2>
+      <ol class="steps">
+        <li>Open this page in <strong>Safari</strong>.</li>
+        <li>Tap <strong>Share</strong> <svg viewBox="0 0 24 24" aria-label="Share"><path d="M12 15V3m-4 4 4-4 4 4M8 10H5v11h14V10h-3"/></svg>.</li>
+        <li>Choose <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
+      </ol>
+      <p class="dialog-text small">On Android or desktop, use the browser's “Install app” option.</p>
+      <div class="dialog-actions"><button id="native-install" class="btn btn-primary" type="button" hidden>Install</button><button class="btn btn-ghost" value="close">Done</button></div>
+    </form>
+  </dialog>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

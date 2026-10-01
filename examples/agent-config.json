@@ -1,0 +1,11 @@
+{
+  "deviceId": "laptop-wsl",
+  "deviceSecret": "<this device's secret, from deploy/new-secret.sh>",
+  "hubUrl": "https://your-server.your-tailnet.ts.net:8443",
+  "label": "Laptop-WSL",
+  "claudePath": "/home/alex/.local/bin/claude",
+  "roots": [{ "name": "Home", "path": "/home/alex" }],
+  "defaultPath": "/home/alex",
+  "stateDir": "state",
+  "updatePublicKey": "<printed by deploy/publish-agent.py --init-key; omit to disable self-update>"
+}

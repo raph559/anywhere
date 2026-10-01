@@ -1,0 +1,24 @@
+{
+  "publicOrigin": "https://your-server.your-tailnet.ts.net:8443",
+  "port": 18250,
+  "ownerName": "Alex",
+  "loginTokenHash": "<sha256 of your browser access key, from deploy/new-secret.sh>",
+  "devices": [
+    {
+      "id": "laptop-wsl",
+      "name": "Laptop-WSL",
+      "os": "wsl",
+      "roots": [{ "name": "Home", "path": "/home/alex" }],
+      "defaultPath": "/home/alex",
+      "tokenHash": "<sha256 of this device's secret>"
+    },
+    {
+      "id": "server",
+      "name": "Server",
+      "os": "linux",
+      "roots": [{ "name": "Home", "path": "/root" }],
+      "defaultPath": "/root",
+      "tokenHash": "<sha256 of this device's secret>"
+    }
+  ]
+}
