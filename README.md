@@ -4,7 +4,7 @@
 
 # Anywhere
 
-**Start Claude Code on any of your machines — from your phone.**
+**Start Claude Code anywhere on any of your machines — from your phone.**
 
 Pick a computer, pick a folder, tap Start. Anywhere opens a Claude Code session there and gives you the link to continue in the Claude app.
 
