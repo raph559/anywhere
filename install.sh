@@ -18,7 +18,8 @@ for tool in curl tar openssl python3 sha256sum; do command -v $tool >/dev/null |
 # Node.js 22+: use the system one if recent enough, otherwise a private copy in $APP/node.
 NODE=$(command -v node || true)
 # The service cannot read home folders (ProtectHome), so ignore a Node.js installed there (nvm, ~/.local).
-case "$(readlink -f "${NODE:-/}")" in /root/*|/home/*) NODE="";; esac
+[ -n "$NODE" ] && NODE=$(readlink -f "$NODE")
+case "$NODE" in /root/*|/home/*) NODE="";; esac
 if [ -z "$NODE" ] || [ "$("$NODE" -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
   case "$(uname -m)" in x86_64) ARCH=x64;; aarch64|arm64) ARCH=arm64;; *) die "Unsupported CPU $(uname -m); install Node.js 22+ yourself.";; esac
   command -v xz >/dev/null || die "xz is required to unpack Node.js (apt install xz-utils)."
