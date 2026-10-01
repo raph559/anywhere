@@ -278,7 +278,13 @@ function folderName(path) { const parts = String(path || '').split(/[\\/]/).filt
 function online(device) { return device?.online === true; }
 function deviceById(id) { return state.devices.find((device) => device.id === id) || null; }
 function deviceName(id) { return deviceById(id)?.name || id || 'Device'; }
-function deviceType(device) { const name = device?.name || device?.id || ''; return /laptop/i.test(name) ? 'laptop' : (/desktop/i.test(name) ? 'desktop' : 'server'); }
+function deviceType(device) {
+  const name = `${device?.name || ''} ${device?.id || ''}`;
+  if (/laptop|book|portable/i.test(name)) return 'laptop';
+  if (/server|vps|srv|host|cloud|nas/i.test(name)) return 'server';
+  if (/desktop|pc|workstation|tower/i.test(name) || ['windows', 'wsl'].includes(device?.os)) return 'desktop';
+  return 'server';
+}
 function deviceKind(device) { const name = device?.name || ''; return device?.os === 'wsl' || /wsl/i.test(name) ? 'WSL' : device?.os === 'windows' || /windows/i.test(name) ? 'Windows' : 'Linux'; }
 function canShare() { return typeof navigator.share === 'function'; }
 function samePath(deviceId, a, b) {
@@ -484,7 +490,13 @@ async function refreshDevices() {
 function renderDeviceChips() {
   const box = $('device-chips');
   if (!state.devicesLoaded) { if (!box.querySelector('.skeleton-chip')) { resetList(box); box.append(...Array.from({ length: 4 }, () => el('span', 'skeleton-chip'))); } return; }
-  if (!state.devices.length) { if (!box.querySelector('.chips-empty')) { resetList(box); box.append(el('span', 'side-empty chips-empty', 'No devices configured.')); } return; }
+  if (!state.devices.length) {
+    if (!box.querySelector('.chips-empty')) {
+      resetList(box); const empty = el('span', 'side-empty chips-empty', 'No devices yet.');
+      const add = el('button', 'btn btn-primary', 'Add a device'); add.type = 'button'; add.addEventListener('click', openAddDevice); empty.append(add); box.append(empty);
+    }
+    return;
+  }
   reconcile(box, state.devices.filter((device) => !device.hidden || state.selected?.id === device.id), { key: (device) => device.id, stagger: true, create: createChip, update: updateChip });
 }
 function createChip(device) {
@@ -553,7 +565,12 @@ function renderSideDevices() {
   setVisible('hidden-list', !isCollapsed('hidden'));
   reconcile($('hidden-list'), isCollapsed('hidden') ? [] : tucked, {
     key: (device) => device.id,
-    create: (device) => { const row = el('div', 'hidden-dev'); const kind = el('span', 'dev-icon'); kind.append(icon(deviceType(device))); row.append(kind, el('span', 'dev-name'), iconButton('eyeOff', 'dev-show', 'Show', () => toggleDeviceHidden(row._key))); return row; },
+    create: (device) => {
+      const row = el('div', 'hidden-dev'); const kind = el('span', 'dev-icon'); kind.append(icon(deviceType(device)));
+      row.append(kind, el('span', 'dev-name'), iconButton('eyeOff', 'dev-show', 'Show', () => toggleDeviceHidden(row._key)));
+      if (device.enrolled) row.append(iconButton('trash', 'dev-forget', 'Remove this device', () => forgetDevice(row._key)));
+      return row;
+    },
     update: (row, device) => { setText(row.children[1], device.name || device.id); setAttr(row.children[2], 'aria-label', `Show ${device.name || device.id}`); setAttr(row.children[2], 'title', `Show ${device.name || device.id}`); }
   });
 }
@@ -1512,6 +1529,60 @@ function renderSessionView() {
   sv.status = vm.status.label;
 }
 
+/* ---------- add and remove devices ---------- */
+const enrollment = { os: 'linux', deviceId: '', command: '', timer: 0 };
+function openAddDevice() {
+  clearTimeout(enrollment.timer); Object.assign(enrollment, { deviceId: '', command: '' });
+  setVisible('add-step-1', true); setVisible('add-step-2', false); setVisible('add-device-error', false);
+  setField($('new-device-name'), ''); closeDrawer(); openDialog($('add-device-dialog'));
+  setTimeout(() => $('new-device-name').focus(), 80);
+}
+function pickOs(os) {
+  enrollment.os = os;
+  for (const option of document.querySelectorAll('.os-option')) setAttr(option, 'aria-checked', String(option.dataset.os === os));
+}
+async function createEnrollment() {
+  const name = $('new-device-name').value.trim();
+  if (!name) { setText($('add-device-error'), 'Give the device a name.'); setVisible('add-device-error', true); $('new-device-name').focus(); return; }
+  const button = $('create-enrollment'); button.disabled = true; setVisible('add-device-error', false);
+  try {
+    const data = await api('/api/enrollments', { method: 'POST', body: { name, os: enrollment.os } });
+    const windows = enrollment.os === 'windows';
+    Object.assign(enrollment, { deviceId: data.deviceId, command: windows ? data.commands.windows : data.commands.unix });
+    setText($('enroll-intro'), windows ? `On ${name}, open PowerShell and run:` : `On ${name}, open a terminal${enrollment.os === 'wsl' ? ' in WSL' : ''} and run:`);
+    setText($('enroll-command'), enrollment.command);
+    setClass($('enroll-wait'), 'enroll-wait');
+    setText($('enroll-wait').lastElementChild, 'Waiting for the device… The command works once and expires in 30 minutes.');
+    setClass($('enroll-wait').firstElementChild, 'dot starting');
+    const from = $('add-device-dialog').offsetHeight;
+    setVisible('add-step-1', false); setVisible('add-step-2', true);
+    animateHeight($('add-device-dialog'), from); enter($('add-step-2'), { y: 8 });
+    waitForEnrollment(data.deviceId, name);
+  } catch (error) { setText($('add-device-error'), messageOf(error)); setVisible('add-device-error', true); }
+  finally { button.disabled = false; }
+}
+function waitForEnrollment(id, name) {
+  clearTimeout(enrollment.timer);
+  enrollment.timer = setTimeout(async () => {
+    if (!$('add-device-dialog').open || enrollment.deviceId !== id) return;
+    try { await refreshDevices(); } catch { /* keep waiting */ }
+    const device = deviceById(id);
+    if (device && online(device)) {
+      setClass($('enroll-wait'), 'enroll-wait done'); setClass($('enroll-wait').firstElementChild, 'dot online');
+      setText($('enroll-wait').lastElementChild, `${name} is connected.`);
+      toast(`${name} is ready.`);
+      return;
+    }
+    waitForEnrollment(id, name);
+  }, 3000);
+}
+async function forgetDevice(id) {
+  const device = deviceById(id); if (!device) return;
+  if (!window.confirm(`Remove ${device.name || id}? Its agent will be disconnected; add it again to use it.`)) return;
+  try { const data = await api(`/api/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }); state.devices = data.devices || state.devices.filter((item) => item.id !== id); renderAll(); toast(`${device.name || id} removed.`); }
+  catch (error) { toast(messageOf(error), { tone: 'error' }); }
+}
+
 /* ---------- drawer ---------- */
 function drawerOpen() { return $('shell').classList.contains('drawer-open'); }
 function openDrawer() {
@@ -1600,6 +1671,12 @@ $('mode-select').addEventListener('change', () => { state.mode = $('mode-select'
 $('trust-dialog').addEventListener('close', () => { const request = state.pendingLaunch; state.pendingLaunch = null; if ($('trust-dialog').returnValue === 'start') launch(request); });
 $('stop-dialog').addEventListener('close', () => { const id = state.pendingStop; state.pendingStop = null; if ($('stop-dialog').returnValue === 'stop' && id) stopSession(id); });
 $('clear-history').addEventListener('click', clearHistory);
+$('add-device').addEventListener('click', openAddDevice);
+$('create-enrollment').addEventListener('click', createEnrollment);
+$('new-device-name').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); createEnrollment(); } });
+for (const option of document.querySelectorAll('.os-option')) option.addEventListener('click', () => pickOs(option.dataset.os));
+$('copy-enroll').addEventListener('click', () => copyLink(enrollment.command).then(() => setText($('copy-enroll'), 'Copied')));
+$('add-device-dialog').addEventListener('close', () => { clearTimeout(enrollment.timer); setText($('copy-enroll'), 'Copy command'); });
 document.querySelectorAll('a[href="#/"]').forEach((link) => link.addEventListener('click', (event) => { event.preventDefault(); newSession(); }));
 $('open-sidebar').addEventListener('click', openDrawer);
 $('close-sidebar').addEventListener('click', () => closeDrawer({ restoreFocus: true }));
@@ -1623,6 +1700,6 @@ setInterval(tickTimes, 1000);
 document.documentElement.classList.toggle('standalone', navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches);
 initDrawerGestures();
 initDeviceDrag();
-for (const id of ['folder-path', 'folder-filter']) smoothInput($(id));
+for (const id of ['folder-path', 'folder-filter', 'new-device-name']) smoothInput($(id));
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
 networkChanged(); boot();

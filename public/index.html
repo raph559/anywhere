@@ -52,7 +52,7 @@
           <div id="pinned-list" class="side-list collapsible"></div>
         </div>
         <div class="side-group">
-          <div class="side-label"><span>Devices</span></div>
+          <div class="side-label"><span>Devices</span><button class="side-action" id="add-device" type="button">+ Add</button></div>
           <div id="device-groups" class="device-groups"></div>
           <div id="hidden-devices" class="hidden-devices" hidden>
             <div class="side-label"><button class="side-toggle" type="button" data-collapse="hidden" aria-expanded="false"><svg class="side-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span id="hidden-count">Hidden</span></button></div>
@@ -168,6 +168,32 @@
       </ol>
       <p class="dialog-text small">On Android or desktop, use the browser's “Install app” option.</p>
       <div class="dialog-actions"><button id="native-install" class="btn btn-primary" type="button" hidden>Install</button><button class="btn btn-ghost" value="close">Done</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="add-device-dialog" class="dialog">
+    <form method="dialog">
+      <h2 class="serif">Add a device</h2>
+      <div id="add-step-1">
+        <label class="field-label" for="new-device-name">Name</label>
+        <input id="new-device-name" class="text-field" maxlength="40" placeholder="Laptop, Office PC, Server…" autocomplete="off" spellcheck="false">
+        <span class="field-label">System</span>
+        <div class="os-picker" role="radiogroup" aria-label="System">
+          <button type="button" class="os-option" role="radio" data-os="linux" aria-checked="true">Linux</button>
+          <button type="button" class="os-option" role="radio" data-os="wsl" aria-checked="false">WSL</button>
+          <button type="button" class="os-option" role="radio" data-os="windows" aria-checked="false">Windows</button>
+        </div>
+        <p class="dialog-text small">Claude Code must already be installed and signed in on that machine. A Windows PC and its WSL are two separate devices.</p>
+        <p id="add-device-error" class="field-error" hidden></p>
+        <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-primary" type="button" id="create-enrollment">Get the command</button></div>
+      </div>
+      <div id="add-step-2" hidden>
+        <p class="dialog-text" id="enroll-intro"></p>
+        <code id="enroll-command" class="code-block enroll-command"></code>
+        <button class="btn btn-ghost btn-block copy-command" type="button" id="copy-enroll">Copy command</button>
+        <p class="enroll-wait" id="enroll-wait"><span class="dot starting"></span><span>Waiting for the device… The command works once and expires in 30 minutes.</span></p>
+        <div class="dialog-actions"><button class="btn btn-primary" value="done">Done</button></div>
+      </div>
     </form>
   </dialog>
 

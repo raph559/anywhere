@@ -16,9 +16,12 @@ const safeText=(value,max=4096)=>typeof value==='string'?value.slice(0,max):'';
 export function createLauncher({config,statePath,publicDir=resolve(HERE,'../public'),clock=now}={}){
   if(!config?.loginTokenHash||!Array.isArray(config.devices))throw Error('Missing launcher configuration');
   const configured=new Map(config.devices.map(d=>[d.id,d]));
-  let state={sessions:[],browserSessions:{},devices:{},commands:[],prefs:{deviceOrder:[],hiddenDevices:[]}};
+  let state={sessions:[],browserSessions:{},devices:{},commands:[],prefs:{deviceOrder:[],hiddenDevices:[]},enrolled:[],enrollCodes:{}};
   if(statePath&&existsSync(statePath))state={...state,...JSON.parse(readFileSync(statePath,'utf8'))};
   state.commands=state.commands.filter(c=>c.type!=='browse');
+  // Devices added from the app ("Add a device") live in the state file next to the configured ones.
+  if(!Array.isArray(state.enrolled))state.enrolled=[];if(!state.enrollCodes||typeof state.enrollCodes!=='object')state.enrollCodes={};
+  for(const d of state.enrolled)if(!configured.has(d.id))configured.set(d.id,{...d,roots:[],defaultPath:'',enrolled:true});
   state.prefs={deviceOrder:Array.isArray(state.prefs?.deviceOrder)?state.prefs.deviceOrder:[],hiddenDevices:Array.isArray(state.prefs?.hiddenDevices)?state.prefs.hiddenDevices:[]};
   // Device order and visibility are shared by every signed-in browser.
   function orderedDevices(){const order=state.prefs.deviceOrder,rank=id=>{const i=order.indexOf(id);return i<0?order.length:i;};return [...configured.values()].map((d,i)=>[d,i]).sort((a,b)=>rank(a[0].id)-rank(b[0].id)||a[1]-b[1]).map(([d])=>({...deviceView(d),hidden:state.prefs.hiddenDevices.includes(d.id)}));}
@@ -38,7 +41,10 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
   function browserSession(req){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('anywhere_session='))?.slice(17);const entry=token&&state.browserSessions[hash(token)];return entry&&entry.expiresAt>clock()?entry:null;}
   function checkOrigin(req){const expected=config.publicOrigin||`http://${req.headers.host}`;return !req.headers.origin||req.headers.origin===expected;}
   function requireAuth(req,res,mutating=false){const session=browserSession(req);if(!session){json(res,401,{error:'Please sign in to your launcher.'});return null;}if(mutating&&(!checkOrigin(req)||!eq(req.headers['x-csrf-token'],session.csrf))){json(res,403,{error:'Refresh the page and try again.'});return null;}return session;}
-  function deviceView(d){const live=state.devices[d.id]||{};return {id:d.id,name:d.name,os:d.os,description:d.description||'',online:clock()-(live.lastSeen||0)<45000,lastSeen:live.lastSeen||null,roots:live.roots||d.roots||[],defaultPath:live.defaultPath||d.defaultPath||'',version:live.version||'',agentVersion:live.agentVersion||'',capabilities:live.capabilities||[],latestAgentVersion:latestAgentVersion()};}
+  const OSES=['linux','wsl','windows'];
+  function enrollCommands(code){const origin=(config.publicOrigin||'').replace(/\/$/,'');return {unix:`curl -fsSL ${origin}/install/agent.sh | sh -s -- ${origin} ${code}`,windows:`& { $h='${origin}'; $c='${code}'; irm "$h/install/agent.ps1" | iex }`};}
+  function newDeviceId(name){const base=(name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'device').slice(0,40);let id=base,n=2;while(configured.has(id)||Object.values(state.enrollCodes).some(e=>e.id===id))id=`${base}-${n++}`;return id;}
+  function deviceView(d){const live=state.devices[d.id]||{};return {id:d.id,name:d.name,os:d.os,enrolled:!!d.enrolled,description:d.description||'',online:clock()-(live.lastSeen||0)<45000,lastSeen:live.lastSeen||null,roots:live.roots||d.roots||[],defaultPath:live.defaultPath||d.defaultPath||'',version:live.version||'',agentVersion:live.agentVersion||'',capabilities:live.capabilities||[],latestAgentVersion:latestAgentVersion()};}
   const ACTIVE=['ready','starting'],MODES=['default','acceptEdits','bypassPermissions'];
   function sessionView(s){const d=configured.get(s.deviceId),view=d?deviceView(d):null;const {requestId,...rest}=s;return {...rest,deviceName:d?.name||s.deviceId,deviceOnline:!!view?.online,canStop:!!view?.capabilities.includes('stop'),stopping:state.commands.some(c=>c.type==='stop'&&c.args.sessionId===s.id)};}
   function command(deviceId,type,args){const item={id:randomUUID(),deviceId,type,args,createdAt:clock(),lastSent:0};state.commands.push(item);save(true);const wake=pollWaiters.get(deviceId);if(wake){pollWaiters.delete(deviceId);wake();}return item;}
@@ -107,6 +113,15 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       if(route==='/health'){json(res,200,{ok:true});return;}
       const agentMatch=route.match(/^\/api\/agents\/([a-z0-9-]{1,64})\/poll$/);if(agentMatch&&req.method==='POST'){await agentPoll(req,res,agentMatch[1]);return;}
       if(route==='/api/status'&&req.method==='GET'){const session=browserSession(req);json(res,200,{authenticated:!!session,appName:'Anywhere',...(session?{csrfToken:session.csrf,ownerName:safeText(config.ownerName,40)}:{})});return;}
+      if(route==='/api/agents/enroll'&&req.method==='POST'){
+        const attempts=(loginAttempts.get('enroll')||[]).filter(t=>clock()-t<15*60000);if(attempts.length>=20){json(res,429,{error:'Too many attempts. Try again in 15 minutes.'});return;}
+        const input=await body(req);const key=hash(String(input.code||'').trim().toUpperCase());const pending=state.enrollCodes[key];
+        for(const [k,e] of Object.entries(state.enrollCodes))if(e.expiresAt<clock())delete state.enrollCodes[k];
+        if(!pending||pending.expiresAt<clock()){attempts.push(clock());loginAttempts.set('enroll',attempts);save();json(res,404,{error:'This code is invalid or has expired. Create a new one in Anywhere.'});return;}
+        delete state.enrollCodes[key];const secret=opaque();const device={id:pending.id,name:pending.name,os:pending.os,tokenHash:hash(secret),createdAt:new Date(clock()).toISOString()};
+        state.enrolled.push(device);configured.set(device.id,{...device,roots:[],defaultPath:'',enrolled:true});save(true);
+        json(res,200,{deviceId:device.id,deviceSecret:secret,label:device.name,hubUrl:(config.publicOrigin||'').replace(/\/$/,''),updatePublicKey:safeText(config.updatePublicKey,100)});return;
+      }
       if(route==='/api/login'&&req.method==='POST'){
         if(!checkOrigin(req)){json(res,403,{error:'Invalid request origin'});return;}
         const ip=req.socket.remoteAddress||'unknown';const attempts=(loginAttempts.get(ip)||[]).filter(t=>clock()-t<15*60000);if(attempts.length>=12){json(res,429,{error:'Too many sign-in attempts. Try again in 15 minutes.'});return;}
@@ -118,6 +133,19 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
         const mutation=!['GET','HEAD'].includes(req.method);if(!requireAuth(req,res,mutation))return;
         if(route==='/api/logout'&&req.method==='POST'){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('anywhere_session='))?.slice(17);if(token)delete state.browserSessions[hash(token)];save(true);res.setHeader('Set-Cookie','anywhere_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');json(res,200,{ok:true});return;}
         if(route==='/api/devices'&&req.method==='GET'){json(res,200,{devices:orderedDevices()});return;}
+        if(route==='/api/enrollments'&&req.method==='POST'){
+          const input=await body(req);const name=typeof input.name==='string'?input.name.replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,40):'';
+          if(!name||!OSES.includes(input.os)){json(res,400,{error:'Give the device a name and pick its system.'});return;}
+          if(!config.publicOrigin){json(res,409,{error:'Set publicOrigin in the hub configuration first.'});return;}
+          const code=randomBytes(8).toString('hex').toUpperCase().replace(/(.{4})(?=.)/g,'$1-');const id=newDeviceId(name);const expiresAt=clock()+30*60000;
+          state.enrollCodes[hash(code)]={id,name,os:input.os,expiresAt};save(true);json(res,201,{deviceId:id,code,expiresAt,commands:enrollCommands(code)});return;
+        }
+        const forgetMatch=route.match(/^\/api\/devices\/([a-z0-9-]{1,64})$/);
+        if(forgetMatch&&req.method==='DELETE'){
+          const id=forgetMatch[1];const index=state.enrolled.findIndex(d=>d.id===id);if(index<0){json(res,409,{error:'Only devices added from the app can be removed here; edit the hub configuration for the others.'});return;}
+          state.enrolled.splice(index,1);configured.delete(id);delete state.devices[id];state.commands=state.commands.filter(c=>c.deviceId!==id);
+          state.prefs.deviceOrder=state.prefs.deviceOrder.filter(x=>x!==id);state.prefs.hiddenDevices=state.prefs.hiddenDevices.filter(x=>x!==id);save(true);json(res,200,{devices:orderedDevices()});return;
+        }
         if(route==='/api/prefs'&&req.method==='PUT'){const input=await body(req);const ids=v=>Array.isArray(v)?[...new Set(v.filter(id=>typeof id==='string'&&configured.has(id)))]:null;const order=ids(input.deviceOrder),hidden=ids(input.hiddenDevices);if(order)state.prefs.deviceOrder=order;if(hidden)state.prefs.hiddenDevices=hidden;save(true);json(res,200,{devices:orderedDevices()});return;}
         if(route==='/api/browse'&&req.method==='GET'){
           const device=configured.get(url.searchParams.get('device'));if(!device){json(res,404,{error:'Unknown device'});return;}const view=deviceView(device);if(!view.online){json(res,409,{error:'This device is offline. Wake it and start its launcher connection.'});return;}
@@ -185,7 +213,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       const target=resolve(publicDir,'.'+(decoded==='/'?'/index.html':decoded));if(!target.startsWith(resolve(publicDir)+sep)){json(res,403,{error:'Not found'});return;}
       if(!existsSync(target)||!statSync(target).isFile()){json(res,404,{error:'Not found'});return;}
       const realRoot=realpathSync(publicDir),realTarget=realpathSync(target);if(!realTarget.startsWith(realRoot+sep)){json(res,403,{error:'Not found'});return;}
-      const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.woff2':'font/woff2','.txt':'text/plain; charset=utf-8'};
+      const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.json':'application/json','.webmanifest':'application/manifest+json','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.woff2':'font/woff2','.txt':'text/plain; charset=utf-8','.sh':'text/plain; charset=utf-8','.ps1':'text/plain; charset=utf-8','.py':'text/plain; charset=utf-8'};
       res.writeHead(200,{'Content-Type':types[extname(target)]||'application/octet-stream','Cache-Control':'no-cache'});res.end(req.method==='HEAD'?undefined:readFileSync(target));
     }catch(error){if(!res.writableEnded)json(res,error.status||500,{error:error.status?error.message:'The launcher could not complete this request.'});console.error(new Date().toISOString(),req.method,req.url?.split('?')[0],error.message);}
   });

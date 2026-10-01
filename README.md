@@ -1,111 +1,153 @@
+<div align="center">
+
+<img src="public/icon-192.png" width="88" alt="">
+
 # Anywhere
 
-Start, open and stop [Claude Code](https://docs.claude.com/en/docs/claude-code) sessions on your own machines, from your phone or any browser.
+**Start Claude Code on any of your machines — from your phone.**
 
-Pick a machine, browse to a folder, tap **Start**: Anywhere launches `claude remote-control` there and hands you the link to continue in the official Claude app or website. Running sessions can be watched, stopped, restarted, renamed and pinned from the same place.
+Pick a computer, pick a folder, tap Start. Anywhere opens a Claude Code session there and gives you the link to continue in the Claude app.
 
-> Anywhere is an independent open-source project. It is not affiliated with, endorsed by or supported by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
+[Install](#install) · [How it works](#how-it-works) · [Security](#security) · [FAQ](#faq)
 
-## Features
+</div>
 
-- **Every machine in one place**: Linux servers, WSL and native Windows, each with its own agent. Sessions are grouped by device; devices can be reordered by drag and drop and hidden.
-- **Folder browser** with project detection, hidden-folder toggle, filter, and a marker on folders where Claude already runs.
-- **Permission mode per session**: *Ask*, *Accept edits* or *Full auto* (`bypassPermissions`).
-- **Live launch timeline**: reach the device → start Claude → get the link. Claude's own confirmation questions (folder trust, enabling Remote Control) are answered from the app, and a banner tells you when one is waiting.
-- **Stop, start again, rename, pin, remove with undo.**
-- **Installable web app** (PWA) with a phone-first interface, light and dark themes, and motion that respects *Reduce motion*.
-- **Signed agent self-update**: publish a new agent once on the hub; every agent verifies the Ed25519 signature before installing it.
-- **No dependencies**: the hub is a single Node.js file, the agent a single Python file (plus `pywinpty` on native Windows).
+<br>
+
+![Anywhere on desktop](docs/desktop.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/phone-launch.png" alt="Starting a session on a phone"></td>
+    <td width="50%"><img src="docs/phone-sidebar.png" alt="Sessions grouped by device"></td>
+  </tr>
+</table>
+
+> [!NOTE]
+> Anywhere is an independent open-source project. It is **not** affiliated with or endorsed by Anthropic. "Claude" and "Claude Code" are trademarks of Anthropic.
+
+## Why
+
+Claude Code's [Remote Control](https://docs.claude.com/en/docs/claude-code) lets you drive a session from the Claude app — but someone still has to start it on the machine. Anywhere is that someone:
+
+- 🖥️ **All your machines in one list** — Linux servers, WSL and Windows PCs.
+- 📂 **Browse folders** and start Claude where your project is.
+- ⏱️ **Watch it start live**, answer Claude's first questions (folder trust…) from your phone.
+- ⏹️ **Stop, restart, rename, pin** your sessions.
+- 🔐 **Choose permissions** per session: *Ask*, *Accept edits* or *Full auto*.
+- 📱 **Installable app** for your phone's Home Screen, light and dark mode.
+
+## Install
+
+You need a Linux server with [Tailscale](https://tailscale.com) (free), and [Claude Code](https://docs.claude.com/en/docs/claude-code) installed and signed in on each machine you want to use.
+
+### 1 · Install the hub on your server
+
+```sh
+curl -fsSL https://github.com/raph559/anywhere/releases/latest/download/install.sh | sudo sh
+```
+
+It installs everything (including Node.js if needed), sets up a private HTTPS address on your tailnet, and prints:
+
+```
+✓ Anywhere is running.
+
+  Open:        https://your-server.your-tailnet.ts.net:8443
+  Access key:  3kP9…          (shown once; keep it in your password manager)
+```
+
+### 2 · Add your machines from the app
+
+Open the address, sign in with the access key, then click **+ Add** next to *Devices*. Give the machine a name, pick its system, and paste the command it shows on that machine:
+
+| System | Where to paste it |
+|---|---|
+| Linux / WSL | a terminal |
+| Windows | PowerShell |
+
+The machine appears online a few seconds later, and its agent starts automatically from then on.
+
+### 3 · On your phone
+
+Open the same address (with Tailscale on), sign in, then **Share → Add to Home Screen**.
+
+**That's it.** To update later, run the install command again: your settings, devices and sessions are kept, and every machine updates its agent by itself.
 
 ## How it works
 
 ```
- phone / browser ──HTTPS──▶ hub (Node.js, on a server)
-                              ▲  outbound long-poll, per-device secret
-             ┌────────────────┼────────────────┐
-         agent (Linux)    agent (WSL)    agent (Windows)
-             │                │                │
-     claude remote-control   ...              ...
+   your phone ──HTTPS (tailnet)──▶  hub  (your server)
+                                     ▲
+                   outbound only     │   one secret per machine
+          ┌──────────────────────────┼──────────────────────────┐
+     agent · laptop           agent · office PC            agent · server
+          │                          │                          │
+  claude remote-control      claude remote-control      claude remote-control
 ```
 
-- The **hub** serves the web app and relays commands. It never sees Claude credentials.
-- Each **agent** connects *out* to the hub (no inbound ports on your computers), lists folders inside the roots you allow, and starts Claude Code's Remote Control in the chosen folder. Claude stays logged in with each machine's own account.
-- Conversations happen in Claude itself; Anywhere only manages the sessions.
+- The **hub** is a single Node.js file that serves the app and passes commands along. It never sees your Claude login.
+- Each **agent** is a single Python file. It connects *out* to the hub (no ports to open on your computers), browses folders inside your home folder, and starts or stops `claude remote-control`.
+- Your conversations happen in the official Claude app; Anywhere only manages the sessions.
 
-## Security model — read before installing
+## Security
 
-Anywhere can start a Claude Code agent with full permissions on your machines from a web page. Treat it like remote access:
+Anywhere can start Claude Code with full permissions on your machines from a web page. Please read this:
 
-- **Keep the hub private.** The recommended setup is [Tailscale Serve](https://tailscale.com/kb/1312/serve) (HTTPS inside your tailnet only). Do not expose it to the public internet.
-- The browser signs in with an **access key**; each device has its own **secret**. The hub stores only SHA-256 hashes of both. Sessions use `HttpOnly`, `SameSite=Strict` cookies and a CSRF token; the page ships a strict Content Security Policy.
-- Agents only browse and launch inside their configured **roots**, and only stop processes they started themselves (verified by PID, start time and executable).
-- **Full auto** means Claude will read, edit and run anything on that machine without asking. Claude Code refuses it when running as root.
-- **Self-update** runs signed code on every agent. Keep the signing key root-only on the hub, away from the web service, or omit `updatePublicKey` / set `"autoUpdate": false` to disable it.
+- **Keep it private.** The installer only publishes the app inside your tailnet (Tailscale Serve). Don't expose it to the internet.
+- **Secrets are hashed.** The access key and each machine's secret are stored as SHA-256 hashes. Device codes work once and expire after 30 minutes.
+- **Agents stay in their lane.** They only browse your home folder and only stop the Claude processes they started.
+- **Full auto is powerful.** Claude will edit and run anything on that machine without asking. Use *Ask* or *Accept edits* when in doubt.
+- **Updates are signed.** Agents only install new versions signed with your server's own key (kept root-only, out of the web service's reach). Set `"autoUpdate": false` in an agent's `config.json` to opt out.
 
-## Requirements
+## FAQ
 
-- Hub: Linux server with Node.js 22+ and systemd, behind private HTTPS (Tailscale Serve, or a reverse proxy on a private network).
-- Agents: Python 3.10+ and a logged-in native Claude Code (`claude`) with Remote Control available. Native Windows also needs `pip install pywinpty`.
+<details>
+<summary><b>Does it work on macOS?</b></summary>
 
-## Setup
+Not yet: the agent relies on Linux and Windows process APIs. The app itself works in any browser.
+</details>
 
-### 1. Hub
+<details>
+<summary><b>I lost my access key.</b></summary>
+
+On the server: `sudo sh /opt/anywhere/deploy/reset-access-key.sh` prints a new one.
+</details>
+
+<details>
+<summary><b>A machine stays offline.</b></summary>
+
+- Linux server: `systemctl status anywhere-agent`
+- WSL / desktop Linux: `systemctl --user status anywhere-agent`, or `~/.anywhere-agent/agent.log`
+- Windows: Task Scheduler → *Anywhere agent*
+
+The machine must be awake and connected to the internet.
+</details>
+
+<details>
+<summary><b>"Taking longer" while starting.</b></summary>
+
+Claude Code on that machine is probably waiting for a sign-in or a setup prompt. Open Claude Code there once, then try again.
+</details>
+
+<details>
+<summary><b>Can I use it without Tailscale?</b></summary>
+
+Yes, behind any HTTPS reverse proxy on a private network pointing to `127.0.0.1:18250`. Give the installer your address:
 
 ```sh
-sudo mkdir -p /opt/anywhere /etc/anywhere
-sudo cp -r hub public deploy package.json /opt/anywhere/
-sh deploy/new-secret.sh            # browser access key: keep the secret, put the hash in the config
-sudo cp examples/hub-config.json /etc/anywhere/config.json   # then edit it
-sudo sh /opt/anywhere/deploy/install-hub.sh
-tailscale serve --bg --https=8443 http://127.0.0.1:18250
+curl -fsSL https://github.com/raph559/anywhere/releases/latest/download/install.sh | sudo ANYWHERE_ORIGIN=https://your-address sh
 ```
+</details>
 
-Set `publicOrigin` to the HTTPS address you open in the browser. Add one entry per device (`id`, `name`, `os` = `linux` | `wsl` | `windows`, browsing `roots`, `defaultPath`, `tokenHash`). `ownerName` is optional and only used for the greeting.
+<details>
+<summary><b>Manual setup / configuration reference</b></summary>
 
-### 2. Signing key for agent updates (optional, recommended)
-
-```sh
-sudo python3 /opt/anywhere/deploy/publish-agent.py --init-key   # prints the public key
-sudo python3 /opt/anywhere/deploy/publish-agent.py              # signs the current agent
-```
-
-Put the printed public key in every agent configuration as `updatePublicKey`. Later, raise `VERSION` in `public/install/device_agent.py`, copy it to `/opt/anywhere/public/install/` and run the publish command again: online agents update themselves within about a minute.
-
-### 3. Agents
-
-For each device, create a secret (`deploy/new-secret.sh`), put its hash in the hub's device entry, and copy `public/install/device_agent.py` with a configuration based on `examples/agent-config.json` (`deviceId` must match the hub, `claudePath` must be the absolute path of the native `claude` executable).
-
-```sh
-python3 device_agent.py check --config config.json   # validates the configuration
-```
-
-- **Linux server**: `sudo sh deploy/install-agent-linux.sh /path/to/agent-folder` installs a systemd service. `KillMode=process` keeps running sessions alive when the agent restarts.
-- **WSL / desktop Linux**: run `python3 device_agent.py run --config config.json` from a login script or a user service.
-- **Windows**: `py -m pip install pywinpty`, then `py device_agent.py run --config config.json` (for example from Task Scheduler at logon). `claudePath` must point to `claude.exe`.
-
-A WSL distribution and its Windows host are separate devices with separate agents.
-
-### 4. Phone
-
-Open the hub address (connected to the same tailnet), sign in with the access key, then *Share → Add to Home Screen*.
-
-## Configuration reference
-
-Hub (`/etc/anywhere/config.json`): `publicOrigin`, `port`, `loginTokenHash`, `ownerName`, `devices[]` (`id`, `name`, `os`, `roots`, `defaultPath`, `tokenHash`, optional `description`).
-
-Agent (`config.json`): `deviceId`, `deviceSecret`, `hubUrl`, `label`, `claudePath`, `roots`, `defaultPath`, `stateDir`, optional `updatePublicKey`, `autoUpdate`, `supportsNoChrome`, and `allowLocalHttp` (local testing only).
-
-Device order, hidden devices, session names and pins are stored by the hub in its state file, so every browser shows the same organisation.
-
-## Troubleshooting
-
-| Symptom | Check |
-|---|---|
-| The page does not open | Tailscale is connected on the phone; `tailscale serve status`; `systemctl status anywhere-hub` |
-| A device is offline | Its agent is running and `check` passes; the device secret matches the hub's hash |
-| "Taking longer" while starting | Claude Code on that machine may need a login or a setup prompt; see the agent's `state/brokers/*/claude.log` |
-| Stop is disabled | The agent is too old; update it once by hand, then self-update takes over |
+- Hub configuration: `/etc/anywhere/config.json` — see [examples/hub-config.json](examples/hub-config.json). Devices listed there are managed by hand; devices added from the app are stored in `/var/lib/anywhere/state.json`.
+- Agent configuration: `config.json` next to `device_agent.py` — see [examples/agent-config.json](examples/agent-config.json).
+- New secret and its hash: [deploy/new-secret.sh](deploy/new-secret.sh). Linux agent as a system service: [deploy/install-agent-linux.sh](deploy/install-agent-linux.sh).
+- Publishing an agent update by hand: raise `VERSION` in `public/install/device_agent.py`, then `sudo python3 /opt/anywhere/deploy/publish-agent.py`.
+</details>
 
 ## License
 
-[MIT](LICENSE). The bundled Source Serif 4 font is licensed under the SIL Open Font License 1.1 ([public/fonts/OFL.txt](public/fonts/OFL.txt)).
+[MIT](LICENSE). The bundled Source Serif 4 font is under the [SIL Open Font License](public/fonts/OFL.txt).
