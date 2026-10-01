@@ -115,6 +115,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       if(route==='/health'){json(res,200,{ok:true});return;}
       const agentMatch=route.match(/^\/api\/agents\/([a-z0-9-]{1,64})\/poll$/);if(agentMatch&&req.method==='POST'){await agentPoll(req,res,agentMatch[1]);return;}
       if(route==='/api/status'&&req.method==='GET'){const session=browserSession(req);json(res,200,{authenticated:!!session,appName:'Anywhere',...(session?{csrfToken:session.csrf,ownerName:safeText(config.ownerName,40)}:{})});return;}
+      if(route==='/api/agents/update-key'&&req.method==='GET'){json(res,200,{key:safeText(config.updatePublicKey,100)});return;}
       if(route==='/api/agents/enroll'&&req.method==='POST'){
         const attempts=(loginAttempts.get('enroll')||[]).filter(t=>clock()-t<15*60000);if(attempts.length>=20){json(res,429,{error:'Too many attempts. Try again in 15 minutes.'});return;}
         const input=await body(req);const key=hash(String(input.code||'').trim().toUpperCase());const pending=state.enrollCodes[key];

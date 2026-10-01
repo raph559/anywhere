@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'anywhere-shell-v15';
+const CACHE = 'anywhere-shell-v20';
 const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg', '/mark.svg', '/fonts/source-serif-4-latin.woff2', '/fonts/source-serif-4-latin-ext.woff2', '/icon-192.png', '/icon-512.png'];
 self.addEventListener('install', (event) => { event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (event) => { event.waitUntil(caches.keys().then((names) => Promise.all(names.filter((name) => name.startsWith('anywhere-shell-') && name !== CACHE).map((name) => caches.delete(name)))).then(() => self.clients.claim())); });

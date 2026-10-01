@@ -28,7 +28,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = 5
+VERSION = 6
 CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode"]
 PERMISSION_MODES = ("default", "acceptEdits", "bypassPermissions")
 # Only code signed with the matching private key (kept root-only on the hub server,
@@ -736,7 +736,36 @@ class DeviceAgent:
             print(json.dumps({"time": now(), "error": {"code": "update_failed", "message": "The agent update failed; the current agent keeps running."}}), flush=True)
         return False
 
+    def adopt_update_key(self):
+        """Agents installed before keys moved into the configuration learn their key once.
+
+        The hub only proposes a key; it is kept only if it verifies the signed manifest of
+        the code running right now, so a hub cannot substitute a key of its own.
+        """
+        if self.config.get("updatePublicKey") or UPDATE_PUBLIC_KEY or self.config.get("autoUpdate") is False:
+            return
+        current = Path(__file__).resolve()
+        try:
+            manifest = read_json(current.with_name("agent-manifest.json"), None)
+            if not isinstance(manifest, dict):
+                return
+            info = json.loads(manifest["payload"])
+            if info.get("sha256") != hashlib.sha256(current.read_bytes()).hexdigest():
+                return
+            key = json.loads(self.fetch("/api/agents/update-key", 4096)).get("key", "")
+            import base64
+            if not key or not ed25519_verify(base64.b64decode(key), manifest["payload"].encode("utf-8"), base64.b64decode(manifest["signature"])):
+                return
+            config = read_json(self.config_path, {})
+            config["updatePublicKey"] = key
+            atomic_json(self.config_path, config)
+            self.config["updatePublicKey"] = key
+            print(json.dumps({"time": now(), "update": {"adoptedKey": True}}), flush=True)
+        except (AgentError, OSError, ValueError, KeyError, TypeError):
+            pass
+
     def run(self):
+        self.adopt_update_key()
         pending = []
         backoff = 2
         with FileLock(self.state / "agent.lock", wait=20):
