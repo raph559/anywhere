@@ -94,4 +94,8 @@ START
   "$DIR/start.sh"
   say "Started; it restarts with each new login shell (added to ~/.profile)."
 fi
+# WSL only starts when Windows starts something in it: add a Windows logon task that wakes this distro.
+if [ "${ANYWHERE_NO_AUTOSTART:-}" != 1 ] && [ -n "${WSL_DISTRO_NAME:-}" ]; then
+  curl -fsSL "$HUB/install/wsl-autostart.sh" | ANYWHERE_DIR=$DIR sh || say "Without that Windows task, the agent only starts when WSL itself is opened."
+fi
 printf '\033[1;32m✓ Done.\033[0m This device appears as online in Anywhere within a few seconds.\n'

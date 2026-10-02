@@ -141,6 +141,12 @@ On the server: `sudo sh /opt/anywhere/deploy/reset-access-key.sh` prints a new o
 - Windows: Task Scheduler → *Anywhere agent*
 
 The machine must be awake and connected to the internet.
+
+**WSL:** WSL only runs while Windows has something open in it, so the installer also adds a Windows task (*Anywhere agent (WSL …)*) that wakes it when you sign in. If you set up this machine before that existed, run this once in WSL (replace `HUB` with your address):
+
+```sh
+curl -fsSL https://HUB/install/wsl-autostart.sh | sh
+```
 </details>
 
 <details>
