@@ -34,7 +34,7 @@ Claude Code's [Remote Control](https://docs.claude.com/en/docs/claude-code) lets
 - 📂 **Browse folders** and start Claude where your project is.
 - ⏱️ **Watch it start live**, answer Claude's first questions (folder trust…) from your phone.
 - ⏹️ **Stop, restart, rename, pin** your sessions.
-- 🔐 **Choose permissions** per session: *Ask*, *Accept edits* or *Full auto*.
+- 🔐 **Choose permissions** per session: *Ask*, *Accept edits*, *Auto* or *Bypass permissions*.
 - 📱 **Installable app** for your phone's Home Screen, light and dark mode.
 
 ## Install
@@ -116,7 +116,7 @@ Anywhere can start Claude Code with full permissions on your machines from a web
 - **Plain http is for local networks only**: traffic, including device secrets, is not encrypted.
 - **Secrets are hashed.** The access key and each machine's secret are stored as SHA-256 hashes. Device codes work once and expire after 30 minutes.
 - **Agents stay in their lane.** They only browse your home folder and only stop the Claude processes they started.
-- **Full auto is powerful.** Claude will edit and run anything on that machine without asking. Use *Ask* or *Accept edits* when in doubt.
+- **Bypass permissions is powerful.** Claude will edit and run anything on that machine without asking and without any safety check (it is Claude Code's `--dangerously-skip-permissions`). The default, *Auto*, also works without asking but has each action reviewed by Claude Code's safety classifier. Use *Ask* or *Accept edits* when in doubt.
 - **Updates are signed.** Agents only install new versions signed with your server's own key (kept root-only, out of the web service's reach). Set `"autoUpdate": false` in an agent's `config.json` to opt out.
 
 ## FAQ

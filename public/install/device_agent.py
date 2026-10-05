@@ -28,9 +28,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = 6
-CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode"]
-PERMISSION_MODES = ("default", "acceptEdits", "bypassPermissions")
+VERSION = 7
+CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode", "permission-mode-auto"]
+PERMISSION_MODES = ("default", "acceptEdits", "auto", "bypassPermissions")
 # Only code signed with the matching private key (kept root-only on the hub server,
 # never readable by the web service) is installed by the self-updater. Each install
 # sets its own key with "updatePublicKey" in the agent configuration; without one,
@@ -932,7 +932,7 @@ def run_broker(request_path):
         if record["status"] == "starting":
             text = ANSI.sub("", transcript).lower()
             if record.get("permissionMode") == "bypassPermissions" and ("root" in text or "sudo" in text) and ("dangerously" in text or "bypass" in text):
-                raise AgentError("bypass_refused", "Claude refuses Full auto on this device (it runs as root). Use Ask or Accept edits here.")
+                raise AgentError("bypass_refused", "Claude refuses Bypass permissions on this device (it runs as root). Use Auto, Accept edits or Ask here.")
             if "this folder is already served by a terminal" in text and "claude remote-control" in text:
                 raise AgentError("already_running", "This folder already has a Claude Remote Control connection. Open its existing connection or add that verified connection to this launcher.")
             if "not trusted" in text or "trust" in text:

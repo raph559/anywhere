@@ -10,21 +10,26 @@ const state = {
   selected: null, directory: null, browsing: false, browseSequence: 0, shownPath: '', skeletonTimer: 0,
   showHidden: readFlag('anywhere-show-hidden'), folderFilter: '',
   route: { view: 'new', id: '' }, routed: false,
-  mode: 'bypassPermissions', launching: false, pendingLaunch: null, pendingStop: null, installPrompt: null,
+  mode: 'auto', launching: false, pendingLaunch: null, pendingStop: null, installPrompt: null,
   polls: new Map(), confirmingTrust: new Set(), submittedTrust: new Map(), trustErrors: new Map(),
   launchAttempts: new Map(), sessionChecks: new Map(), sessionFirstSeen: new Map(), actionErrors: new Map(), busy: new Set(),
   pendingRemovals: new Map(), pendingClear: null, editDevices: false
 };
 const ACTIVE = ['ready', 'starting'];
-const MODE_LABELS = { bypassPermissions: 'Full auto', acceptEdits: 'Accept edits', default: 'Ask' };
-const MODE_ICONS = { bypassPermissions: 'bolt', acceptEdits: 'pencil', default: 'shield' };
+const MODE_LABELS = { auto: 'Auto', bypassPermissions: 'Bypass permissions', acceptEdits: 'Accept edits', default: 'Ask' };
+const MODE_ICONS = { auto: 'wand', bypassPermissions: 'bolt', acceptEdits: 'pencil', default: 'shield' };
 const MODE_TEXT = {
-  bypassPermissions: 'Full auto: Claude reads, edits and runs anything in this folder and on this machine without asking you first.',
+  auto: 'Auto: Claude works without asking you, while a safety check reviews each action and blocks the risky ones.',
+  bypassPermissions: 'Bypass permissions: Claude reads, edits and runs anything in this folder and on this machine without asking and without any safety check.',
   acceptEdits: 'Accept edits: file edits go through without asking; commands still ask for your approval in Claude.',
   default: 'Ask: Claude asks for your approval in Claude before edits and commands.'
 };
 function supportsModes(device) { return (device?.capabilities || []).includes('permission-mode'); }
-function modeFor(device, wanted = state.mode) { return supportsModes(device) ? wanted : 'default'; }
+function modeFor(device, wanted = state.mode) {
+  if (!supportsModes(device)) return 'default';
+  // Agents older than v7 don't know Auto; Accept edits is the closest mode they have.
+  return wanted === 'auto' && !(device?.capabilities || []).includes('permission-mode-auto') ? 'acceptEdits' : wanted;
+}
 
 const icons = {
   desktop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8m-4-4v4"/></svg>',
@@ -41,6 +46,7 @@ const icons = {
   clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path pathLength="1" d="m6 12.5 4 4 8-9"/></svg>',
   bolt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6l1-7Z"/></svg>',
+  wand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2Z"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 5 3 8.5 7 10 4-1.5 7-5 7-10V6l-7-3Z"/></svg>',
   caret: '<svg class="side-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>',
