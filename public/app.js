@@ -891,8 +891,9 @@ function updateLaunchButton() {
   setProp($('folder-path'), 'disabled', !state.selected || state.launching);
   const modes = supportsModes(state.selected); const select = $('mode-select');
   setProp(select, 'disabled', (!!state.selected && !modes) || state.launching || !!running);
-  setProp(select, 'value', state.selected ? modeFor(state.selected) : state.mode);
-  setProp(select, 'title', state.selected && !modes ? 'This device\'s agent is too old for permission choices; only Ask is available.' : 'Permissions for this session');
+  const runningMode = running && MODE_LABELS[running.permissionMode] ? running.permissionMode : null;
+  setProp(select, 'value', runningMode || (state.selected ? modeFor(state.selected) : state.mode));
+  setProp(select, 'title', state.selected && !modes ? 'This device\'s agent is too old for permission choices; only Ask is available.' : running ? 'Claude is already running in this folder with these permissions. Stop it to choose others.' : 'Permissions for this session');
   setProp($('folder-up'), 'disabled', state.browsing || state.launching || !state.directory?.parentPath);
 }
 
