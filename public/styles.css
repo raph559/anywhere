@@ -300,10 +300,26 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
 .path-form input:focus { outline: none; color: var(--text); }
 .path-form input::placeholder { color: var(--text-3); }
 .mode-pick { position: relative; flex-shrink: 0; }
-.mode-pick select { appearance: none; -webkit-appearance: none; height: 36px; padding: 0 28px 0 12px; border-radius: 10px; border: 1px solid var(--border); background: transparent; color: var(--text-2); font-size: 13px; cursor: pointer; transition: background-color var(--dur-fast), color var(--dur-fast), opacity var(--dur-fast); }
-.mode-pick select:disabled { opacity: .5; cursor: default; }
-.mode-pick::after { content: ""; position: absolute; right: 11px; top: 15px; width: 6px; height: 6px; border-right: 1.5px solid var(--text-3); border-bottom: 1.5px solid var(--text-3); transform: rotate(45deg); pointer-events: none; }
-.mode-pick option { background: var(--surface); color: var(--text); }
+.mode-button { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 11px; border-radius: 10px; border: 1px solid var(--border); background: transparent; color: var(--text-2); font-size: 13px; white-space: nowrap; cursor: pointer; transition: background-color var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast), opacity var(--dur-fast); }
+.mode-button:disabled { opacity: .5; cursor: default; }
+.mode-button[aria-expanded="true"] { background: var(--hover); color: var(--text); border-color: var(--border-strong); }
+.mode-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.mode-button-icon { display: inline-flex; color: var(--accent); }
+.mode-caret { color: var(--text-3); transition: transform var(--dur-base) var(--ease-out); }
+.mode-button[aria-expanded="true"] .mode-caret { transform: rotate(180deg); }
+.mode-menu { position: fixed; z-index: 60; padding: 6px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border-strong); box-shadow: var(--shadow); display: grid; gap: 2px; opacity: 0; transform: translateY(6px) scale(.98); transform-origin: bottom right; transition: opacity var(--dur-fast), transform var(--dur-base) var(--ease-out); }
+.mode-menu[hidden] { display: none; }
+.mode-menu.below { transform: translateY(-6px) scale(.98); transform-origin: top right; }
+.mode-menu.open { opacity: 1; transform: none; }
+.mode-option { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border-radius: 9px; text-align: left; color: var(--text); cursor: pointer; transition: background-color var(--dur-fast); }
+.mode-option > svg { width: 17px; height: 17px; fill: none; stroke: var(--text-3); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.mode-option[aria-selected="true"] > svg:first-child { stroke: var(--accent); }
+.mode-option-text { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.mode-option-name { font-size: 14px; font-weight: 500; }
+.mode-option-hint { font-size: 12px; color: var(--text-3); line-height: 1.35; }
+.mode-option .mode-option-check { stroke: var(--accent); stroke-width: 2; opacity: 0; }
+.mode-option[aria-selected="true"] .mode-option-check { opacity: 1; }
+.mode-option:focus-visible { outline: none; background: var(--hover); }
 .dialog-text.warn { color: var(--warn); }
 .send-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 0 10px 0 14px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 14px; font-weight: 500; flex-shrink: 0; }
 .send-btn svg { width: 17px; height: 17px; stroke-width: 2.2; transition: transform var(--dur-base) var(--ease-out); }
@@ -460,12 +476,13 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
   .new-session:hover .plus { transform: rotate(90deg); }
   .crumb:hover, .recent-chip:hover, .device-chip:hover { color: var(--text); }
   .side-action:hover, .foot-btn:hover { color: var(--text); background: var(--hover); }
-  .mode-pick select:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  .mode-button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+  .mode-option:hover { background: var(--hover); }
   .jump-card:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); }
   .toast-action:hover { background: rgba(127, 127, 127, .16); }
 }
 @media (pointer: coarse) {
-  .path-form input, .mode-pick select, .filter-form input { font-size: 16px; }
+  .path-form input, .filter-form input { font-size: 16px; }
 }
 @media (min-width: 821px) {
   .toasts { left: calc(50% + 136px); }

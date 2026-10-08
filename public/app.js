@@ -900,6 +900,7 @@ function updateLaunchButton() {
   const runningMode = running && MODE_LABELS[running.permissionMode] ? running.permissionMode : null;
   setProp(select, 'value', runningMode || (state.selected ? modeFor(state.selected) : state.mode));
   setProp(select, 'title', state.selected && !modes ? 'This device\'s agent is too old for permission choices; only Ask is available.' : running ? 'Claude is already running in this folder with these permissions. Stop it to choose others.' : 'Permissions for this session');
+  syncModePicker();
   setProp($('folder-up'), 'disabled', state.browsing || state.launching || (state.directory ? !state.directory.parentPath : !state.selected));
 }
 
@@ -1683,6 +1684,66 @@ $('launch-button').addEventListener('click', () => {
   askLaunch({ deviceId: state.selected.id, path: state.directory.path, permissionMode: modeFor(state.selected) });
 });
 $('mode-select').addEventListener('change', () => { state.mode = $('mode-select').value; });
+
+/* ---------- permissions menu (styled stand-in for the hidden <select>) ---------- */
+const MODE_HINTS = {
+  auto: 'Never asks, blocks risky actions',
+  bypassPermissions: 'Never asks, no safety check',
+  acceptEdits: 'Edits go through, commands ask',
+  default: 'Asks before edits and commands'
+};
+function syncModePicker() {
+  const select = $('mode-select'); const button = $('mode-button'); const mode = MODE_LABELS[select.value] ? select.value : 'default';
+  setProp(button, 'disabled', select.disabled); setProp(button, 'title', select.title);
+  if (button._key !== mode) { button._key = mode; $('mode-button-icon').replaceChildren(icon(MODE_ICONS[mode])); setText($('mode-button-label'), MODE_LABELS[mode]); }
+  if (select.disabled) closeModeMenu();
+}
+function modeMenuOpen() { return !$('mode-menu').hidden; }
+function placeModeMenu() {
+  const menu = $('mode-menu'); const box = $('mode-button').getBoundingClientRect(); const gap = 8;
+  const width = Math.min(300, window.innerWidth - 16); menu.style.width = `${width}px`;
+  menu.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`;
+  const above = box.top - gap >= menu.offsetHeight + 8 || box.top > window.innerHeight - box.bottom;
+  menu.classList.toggle('below', !above);
+  if (above) { menu.style.top = ''; menu.style.bottom = `${window.innerHeight - box.top + gap}px`; }
+  else { menu.style.bottom = ''; menu.style.top = `${box.bottom + gap}px`; }
+}
+function openModeMenu() {
+  const menu = $('mode-menu'); const select = $('mode-select'); if (select.disabled || modeMenuOpen()) return;
+  menu.replaceChildren(...[...select.options].map((option) => {
+    const row = el('button', 'mode-option'); row.type = 'button'; row.setAttribute('role', 'option'); row.dataset.mode = option.value;
+    const chosen = option.value === select.value; row.setAttribute('aria-selected', String(chosen));
+    const text = el('span', 'mode-option-text'); text.append(el('span', 'mode-option-name', MODE_LABELS[option.value]), el('span', 'mode-option-hint', MODE_HINTS[option.value] || ''));
+    const tick = icon('check'); tick.classList.add('mode-option-check');
+    row.append(icon(MODE_ICONS[option.value]), text, tick);
+    row.addEventListener('click', () => pickMode(option.value));
+    return row;
+  }));
+  menu.hidden = false; placeModeMenu(); setAttr($('mode-button'), 'aria-expanded', 'true');
+  requestAnimationFrame(() => { menu.classList.add('open'); (menu.querySelector('[aria-selected="true"]') || menu.firstElementChild)?.focus({ preventScroll: true }); });
+}
+function closeModeMenu({ focus = false } = {}) {
+  const menu = $('mode-menu'); if (menu.hidden) return;
+  menu.classList.remove('open'); menu.hidden = true; setAttr($('mode-button'), 'aria-expanded', 'false');
+  if (focus) $('mode-button').focus({ preventScroll: true });
+}
+function pickMode(mode) {
+  const select = $('mode-select');
+  if (select.value !== mode) { select.value = mode; select.dispatchEvent(new Event('change', { bubbles: true })); }
+  closeModeMenu({ focus: true }); updateLaunchButton();
+}
+$('mode-button').addEventListener('click', () => { if (modeMenuOpen()) closeModeMenu(); else openModeMenu(); });
+$('mode-button').addEventListener('keydown', (event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); openModeMenu(); } });
+$('mode-menu').addEventListener('keydown', (event) => {
+  const rows = [...$('mode-menu').children]; const index = rows.indexOf(document.activeElement);
+  if (event.key === 'Tab') closeModeMenu();
+  else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); rows[(index + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length]?.focus(); }
+  else if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); rows[event.key === 'Home' ? 0 : rows.length - 1]?.focus(); }
+});
+document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modeMenuOpen()) { event.preventDefault(); event.stopPropagation(); closeModeMenu({ focus: true }); } }, true);
+document.addEventListener('pointerdown', (event) => { if (modeMenuOpen() && !event.target.closest('#mode-menu, #mode-button')) closeModeMenu(); }, true);
+window.addEventListener('resize', () => closeModeMenu());
+window.addEventListener('scroll', (event) => { if (modeMenuOpen() && !event.target.closest?.('#mode-menu')) closeModeMenu(); }, true);
 $('trust-dialog').addEventListener('close', () => { const request = state.pendingLaunch; state.pendingLaunch = null; if ($('trust-dialog').returnValue === 'start') launch(request); });
 $('stop-dialog').addEventListener('close', () => { const id = state.pendingStop; state.pendingStop = null; if ($('stop-dialog').returnValue === 'stop' && id) stopSession(id); });
 $('clear-history').addEventListener('click', clearHistory);
