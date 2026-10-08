@@ -742,7 +742,9 @@ async function browse(path, { first = false } = {}) {
     renderFolder();
   } catch (error) {
     if (sequence !== state.browseSequence) return;
-    state.directory = null; state.shownPath = '';
+    // Stay in the folder we were in: a refused or failed folder must never be a dead end.
+    if (state.directory) { toast(messageOf(error)); setField($('folder-path'), state.directory.path || ''); return; }
+    state.shownPath = '';
     list.replaceChildren(); list.style.minHeight = '';
     setVisible('filter-form', false); setVisible('folder-foot', false);
     showFolderMessage(messageOf(error), true);
@@ -870,11 +872,15 @@ function renderBreadcrumbs(path) {
   const root = windows ? (parts.shift() || '') + separator : '/';
   const segments = [{ name: root, path: root }]; let currentPath = root;
   for (const part of parts) { currentPath = joinPath(currentPath, part); segments.push({ name: part, path: currentPath }); }
+  const norm = (value) => { const text = String(value || '').replace(/[\\/]+$/, ''); return windows ? text.toLowerCase() : text; };
+  const roots = (state.directory?.roots || []).map((item) => norm(typeof item === 'string' ? item : item?.path)).filter(Boolean);
+  const allowed = (value) => !roots.length || roots.some((item) => norm(value) === item || norm(value).startsWith(item + separator));
   for (const [index, segment] of segments.entries()) {
     if (index > 1 || (index === 1 && windows)) crumbs.append(el('span', 'crumb-sep', '/'));
     const button = el('button', 'crumb', segment.name); button.type = 'button'; button.title = segment.path;
     if (index === segments.length - 1) button.setAttribute('aria-current', 'location');
-    button.addEventListener('click', () => browse(segment.path)); crumbs.append(button);
+    if (allowed(segment.path)) button.addEventListener('click', () => browse(segment.path)); else { button.disabled = true; button.title = 'Outside the folders this device shares'; }
+    crumbs.append(button);
   }
   requestAnimationFrame(() => { crumbs.scrollTo({ left: crumbs.scrollWidth, behavior: motionOK() ? 'smooth' : 'auto' }); });
 }
@@ -894,7 +900,7 @@ function updateLaunchButton() {
   const runningMode = running && MODE_LABELS[running.permissionMode] ? running.permissionMode : null;
   setProp(select, 'value', runningMode || (state.selected ? modeFor(state.selected) : state.mode));
   setProp(select, 'title', state.selected && !modes ? 'This device\'s agent is too old for permission choices; only Ask is available.' : running ? 'Claude is already running in this folder with these permissions. Stop it to choose others.' : 'Permissions for this session');
-  setProp($('folder-up'), 'disabled', state.browsing || state.launching || !state.directory?.parentPath);
+  setProp($('folder-up'), 'disabled', state.browsing || state.launching || (state.directory ? !state.directory.parentPath : !state.selected));
 }
 
 /* ---------- recents and quick starts ---------- */
@@ -1664,7 +1670,7 @@ $('login-form').addEventListener('submit', async (event) => {
 $('logout-button').addEventListener('click', async () => { flushRemovals(); try { await api('/api/logout', { method: 'POST', body: {} }); showLogin(); } catch (error) { showError(messageOf(error)); } });
 for (const toggle of document.querySelectorAll('[data-collapse]')) toggle.addEventListener('click', () => toggleCollapsed(toggle.dataset.collapse));
 $('refresh-folders').addEventListener('click', () => { if (state.directory?.path) browse(state.directory.path); });
-$('folder-up').addEventListener('click', () => { if (state.directory?.parentPath) browse(state.directory.parentPath); });
+$('folder-up').addEventListener('click', () => { if (state.directory?.parentPath) browse(state.directory.parentPath); else if (!state.directory && state.selected) browse(state.selected.defaultPath || undefined, { first: true }); });
 $('folder-list').addEventListener('click', (event) => { const row = event.target.closest('.folder-row'); if (row && !row.disabled && row._path) browse(row._path); });
 $('path-form').addEventListener('submit', (event) => { event.preventDefault(); const path = $('folder-path').value.trim(); if (path) browse(path); });
 $('folder-filter').addEventListener('input', () => { state.folderFilter = $('folder-filter').value; applyFolderFilter(); });

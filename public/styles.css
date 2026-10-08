@@ -269,6 +269,7 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
 .crumb { font-size: 13px; color: var(--text-3); padding: 4px 6px; border-radius: 6px; flex-shrink: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 .crumb[aria-current] { color: var(--text); font-weight: 500; }
 .crumb-sep { color: var(--text-3); opacity: .6; font-size: 12px; }
+.crumb:disabled { opacity: .5; cursor: default; }
 .filter-form { display: flex; align-items: center; gap: 8px; margin: 8px 8px 0; padding: 0 10px; height: 36px; border-radius: 10px; background: var(--hover); }
 .filter-form svg { width: 16px; height: 16px; color: var(--text-3); }
 .filter-form input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; font-size: 14px; outline: none; }
