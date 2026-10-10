@@ -1685,6 +1685,26 @@ $('launch-button').addEventListener('click', () => {
 });
 $('mode-select').addEventListener('change', () => { state.mode = $('mode-select').value; });
 
+/* ---------- horizontal strips: mouse wheel scrolls them, faded edges show there is more ---------- */
+function setupStrip(node) {
+  const edges = () => {
+    const max = node.scrollWidth - node.clientWidth;
+    node.classList.toggle('more-left', node.scrollLeft > 2); node.classList.toggle('more-right', node.scrollLeft < max - 2);
+  };
+  node.addEventListener('wheel', (event) => {
+    if (event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    const max = node.scrollWidth - node.clientWidth; if (max <= 0) return;
+    const delta = event.deltaMode === 1 ? event.deltaY * 32 : event.deltaY;
+    // At either end, let the wheel scroll the page as usual.
+    if ((delta < 0 && node.scrollLeft <= 0) || (delta > 0 && node.scrollLeft >= max - 1)) return;
+    event.preventDefault(); node.scrollLeft += delta;
+  }, { passive: false });
+  node.addEventListener('scroll', edges, { passive: true });
+  new ResizeObserver(edges).observe(node); new MutationObserver(edges).observe(node, { childList: true, subtree: true, characterData: true });
+  edges();
+}
+for (const id of ['device-chips', 'breadcrumbs']) setupStrip($(id));
+
 /* ---------- permissions menu (styled stand-in for the hidden <select>) ---------- */
 const MODE_HINTS = {
   auto: 'Never asks, blocks risky actions',

@@ -254,6 +254,9 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
 .devices-row { padding: 12px 12px 0; }
 .device-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px; scrollbar-width: none; scroll-padding-inline: 12px; }
 .device-chips::-webkit-scrollbar { display: none; }
+.more-left { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px); mask-image: linear-gradient(to right, transparent, #000 28px); }
+.more-right { -webkit-mask-image: linear-gradient(to left, transparent, #000 28px); mask-image: linear-gradient(to left, transparent, #000 28px); }
+.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
 .device-chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 10px; border-radius: 999px; border: 1px solid var(--border); font-size: 13px; color: var(--text-2); white-space: nowrap; flex-shrink: 0; }
 .device-chip svg { width: 16px; height: 16px; }
 .device-chip.selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
