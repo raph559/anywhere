@@ -10,7 +10,7 @@ Pick a computer, pick a folder, tap Start. Anywhere opens a Claude Code session 
 
 [Install](#install) · [How it works](#how-it-works) · [Security](#security) · [FAQ](#faq)
 
-[![Security scan](https://github.com/raph559/anywhere/actions/workflows/scan.yml/badge.svg)](https://github.com/raph559/anywhere/actions/workflows/scan.yml) [![HOL Guard](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fguard%2Fraph559%2Fanywhere%3Fstyle%3Dflat-square)](https://hol.org/registry/plugins/raph559%2Fanywhere)
+[![Security scan](https://github.com/raph559/anywhere/actions/workflows/scan.yml/badge.svg)](https://github.com/raph559/anywhere/actions/workflows/scan.yml)
 
 </div>
 
