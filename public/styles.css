@@ -387,6 +387,10 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
 .s-note.error { color: var(--danger); }
 .s-keep { display: flex; align-items: center; gap: 16px; width: 100%; margin-top: 22px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); text-align: left; cursor: pointer; transition: background-color var(--dur-fast), border-color var(--dur-fast); }
 .s-keep[hidden] { display: none; }
+.s-folder { margin-top: 22px; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.s-folder-top { display: flex; align-items: center; gap: 16px; padding: 12px 14px; }
+.s-keep.inner { margin-top: 0; border: 0; border-top: 1px solid var(--border); border-radius: 0; }
+.btn.sm { min-height: 32px; height: 32px; padding: 0 12px; font-size: 13px; flex-shrink: 0; }
 .s-conn { display: flex; align-items: center; gap: 16px; margin-top: 22px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); color: inherit; text-decoration: none; transition: background-color var(--dur-fast), border-color var(--dur-fast); }
 .s-conn > svg { width: 16px; height: 16px; fill: none; stroke: var(--text-3); stroke-width: 1.8; flex-shrink: 0; }
 .s-keep-label { display: grid; gap: 2px; flex: 1; min-width: 0; }

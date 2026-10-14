@@ -46,6 +46,7 @@ const icons = {
   clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path pathLength="1" d="m6 12.5 4 4 8-9"/></svg>',
   bolt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6l1-7Z"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12Z"/></svg>',
   wand: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2Z"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/></svg>',
   shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 5 3 8.5 7 10 4-1.5 7-5 7-10V6l-7-3Z"/></svg>',
@@ -612,8 +613,11 @@ function createDeviceGroup(device) {
 }
 function deviceItems(device) {
   const conversations = liveConversations().filter((item) => item.deviceId === device.id).map((item) => ({ kind: 'c', item }));
-  const connections = visibleSessions().filter((session) => session.deviceId === device.id && sessionActive(session) && !session.pinned
-    && !conversations.some(({ item }) => samePath(device.id, item.path, session.path))).map((item) => ({ kind: 's', item }));
+  // Claude running in a folder is plumbing; it only shows up while it starts, needs you, or just failed to start.
+  const dayAgo = Date.now() - 86400000;
+  const connections = visibleSessions().filter((session) => session.deviceId === device.id && (
+    session.status === 'starting' || trustPrompt(session) || (session.status === 'failed' && new Date(session.updatedAt || session.createdAt || 0).getTime() > dayAgo)
+  )).map((item) => ({ kind: 's', item }));
   return [...conversations, ...connections];
 }
 function updateDeviceGroup(group, device) {
@@ -973,9 +977,14 @@ function quickStarts(limit = 4) {
   }
   return [...found.values()].filter((item) => deviceById(item.deviceId)).sort((a, b) => (b.active - a.active) || (b.ts - a.ts)).slice(0, limit);
 }
+function jumpItems(limit = 4) {
+  const conversations = liveConversations().filter((item) => deviceById(item.deviceId)).map((item) => ({ key: `c:${item.deviceId}/${item.id}`, kind: 'c', conversation: item, deviceId: item.deviceId, path: item.path }));
+  const folders = quickStarts(24).filter((item) => !conversations.some((c) => c.deviceId === item.deviceId && samePath(item.deviceId, c.path, item.path))).map((item) => ({ ...item, kind: 'f' }));
+  return [...conversations, ...folders].slice(0, limit);
+}
 function renderJumpBack() {
   const show = state.route.view === 'new' && !state.selected && state.devicesLoaded && state.sessionsLoaded;
-  const items = show ? quickStarts() : [];
+  const items = show ? jumpItems() : [];
   setVisible('jump', items.length > 0);
   reconcile($('jump-list'), items, { key: (item) => item.key, stagger: true, create: createJumpCard, update: updateJumpCard });
 }
@@ -988,8 +997,19 @@ function createJumpCard() {
   return card;
 }
 function updateJumpCard(card, item) {
-  const device = deviceById(item.deviceId); const session = item.active ? findSession(item.sessionId) : null;
-  const status = session ? statusOf(session) : null; const type = deviceType(device);
+  const device = deviceById(item.deviceId); const type = deviceType(device);
+  if (item.kind === 'c') {
+    const conversation = item.conversation; const status = conversationStatus(conversation);
+    setClass(card, `jump-card${status.cls === 'working' ? ' attention' : ' running'}`); setProp(card, 'disabled', false);
+    const box = card.children[0]; if (box._type !== 'chat') { box._type = 'chat'; box.replaceChildren(icon('chat')); }
+    setText(card.children[1], conversationTitle(conversation));
+    const [label, time] = card.children[2].children; setText(label, `${device?.name || item.deviceId} · ${folderName(conversation.path)}`);
+    setAttr(time, 'data-ts', null); setAttr(time, 'data-fmt', null); setText(time, '');
+    setClass(card.children[3], `dot ${status.cls}`.trim());
+    setAttr(card, 'aria-label', `${conversationTitle(conversation)} on ${device?.name || item.deviceId}, ${status.label}`); setAttr(card, 'title', conversation.path);
+    return;
+  }
+  const status = null;
   const cls = status ? (status.cls === 'ready' ? ' running' : status.cls === 'attention' ? ' attention' : '') : '';
   setClass(card, `jump-card${cls}`);
   setProp(card, 'disabled', !item.active && !online(device));
@@ -1005,10 +1025,9 @@ function updateJumpCard(card, item) {
   setAttr(card, 'title', item.path);
 }
 function openQuickStart(key) {
-  const item = quickStarts(24).find((candidate) => candidate.key === key); if (!item) return;
-  const running = activeSessionAt(item.deviceId, item.path);
-  if (running) { navigate(`#/s/${running.id}`); return; }
-  askLaunch({ deviceId: item.deviceId, path: item.path, permissionMode: item.mode || state.mode });
+  const item = jumpItems(24).find((candidate) => candidate.key === key); if (!item) return;
+  if (item.kind === 'c') { navigate(conversationHash(item.conversation)); return; }
+  newConversationIn({ deviceId: item.deviceId, path: item.path, mode: item.mode });
 }
 
 /* ---------- launch ---------- */
@@ -1245,10 +1264,9 @@ function syncAttention() {
 
 function renderSidebarSessions() {
   const sessions = visibleSessions();
-  const pinned = sessions.filter((session) => session.pinned);
+  const pinned = [];
   const history = [
-    ...(state.pendingClear ? [] : endedConversations().slice(0, 20)).map((item) => ({ kind: 'c', item })),
-    ...sessions.filter((session) => session.status === 'failed' && !session.pinned).map((item) => ({ kind: 's', item }))
+    ...(state.pendingClear ? [] : endedConversations().slice(0, 30)).map((item) => ({ kind: 'c', item }))
   ];
   for (const key of ['pinned', 'history']) setAttr(document.querySelector(`[data-collapse="${key}"]`), 'aria-expanded', String(!isCollapsed(key)));
   setVisible('pinned-group', pinned.length > 0);
@@ -1270,7 +1288,7 @@ function createSideSession() {
 }
 function sideKey(entry) { return `${entry.kind}:${entry.kind === 'c' ? `${entry.item.deviceId}/${entry.item.id}` : entry.item.id}`; }
 function updateSideEntry(row, entry, withDevice) {
-  setVisible(row.children[1], entry.kind === 's');
+  setVisible(row.children[1], false);
   if (entry.kind === 's') updateSideSession(row, entry.item, withDevice); else updateSideConversation(row, entry.item, withDevice);
 }
 function updateSideConversation(row, item, withDevice) {
@@ -1319,7 +1337,7 @@ function renderConversationView() {
   const connection = activeSessionAt(item.deviceId, item.path); const status = conversationStatus(item);
   const vm = {
     title: conversationTitle(item), url: item.url, path: item.path, status, live: item.live, name, type: deviceType(device || { name }), online: online(device),
-    connection: connection ? { id: connection.id, label: statusOf(connection).label, mode: MODE_LABELS[connection.permissionMode] || MODE_LABELS.default, keep: !!connection.keepAlive, url: sessionReady(connection) ? connection.url : '' } : null,
+    connection: connection ? { id: connection.id, label: statusOf(connection).label, mode: MODE_LABELS[connection.permissionMode] || MODE_LABELS.default, keep: !!connection.keepAlive, stopping: !!connection.stopping, canStop: connection.canStop !== false && connection.deviceOnline !== false } : null,
     started: item.startedAt || 0, updated: item.updatedAt || 0, ended: item.live ? 0 : (item.endedAt || 0)
   };
   const signature = JSON.stringify(vm); if (signature === cv.sig) return;
@@ -1345,9 +1363,17 @@ function renderConversationView() {
   const parts = [head, path, actions];
   if (!vm.online) parts.push(el('p', 's-note', `${name} is offline. The conversation is still in the Claude app, but you can't start a new one there until it's back.`));
   if (vm.connection) {
-    const row = el('a', 's-conn'); row.href = `#/s/${vm.connection.id}`;
-    const text = el('span', 's-keep-label'); text.append(el('span', 's-keep-title', 'Connection to this folder'), el('span', 's-keep-hint', [vm.connection.label, vm.connection.mode, vm.connection.keep ? 'Restarts after reboot' : ''].filter(Boolean).join(' · ')));
-    row.append(text, icon('chevron')); parts.push(row);
+    // What Anywhere started in this folder: every conversation here runs inside it.
+    const card = el('section', 's-folder'); const top = el('div', 's-folder-top');
+    const text = el('span', 's-keep-label'); text.append(el('span', 's-keep-title', 'Claude in this folder'), el('span', 's-keep-hint', `${vm.connection.label} · ${vm.connection.mode} · up to 8 conversations at once`));
+    const stop = el('button', 'btn btn-danger-ghost sm', vm.connection.stopping ? 'Stopping…' : 'Stop'); stop.type = 'button'; withIcon(stop, 'stop');
+    stop.disabled = vm.connection.stopping || !vm.connection.canStop; stop.title = 'Stops Claude in this folder, with every conversation running there';
+    stop.addEventListener('click', () => askStop(vm.connection.id));
+    top.append(text, stop);
+    const keep = el('button', 's-keep inner'); keep.type = 'button'; keep.setAttribute('role', 'switch'); keep.setAttribute('aria-checked', String(vm.connection.keep));
+    const keepText = el('span', 's-keep-label'); keepText.append(el('span', 's-keep-title', 'Restart after reboot'), el('span', 's-keep-hint', `If ${name} restarts, Claude comes back in this folder with the same permissions.`));
+    keep.append(keepText, el('span', 's-switch')); keep.addEventListener('click', () => toggleKeepAlive(vm.connection.id));
+    card.append(top, keep); parts.push(card);
   }
   const details = el('dl', 's-details');
   const add = (label, value) => { if (value) details.append(el('dt', '', label), el('dd', '', value)); };
@@ -1362,7 +1388,7 @@ function newConversationIn(item) {
   // A running connection opens a fresh conversation in the Claude app; otherwise start one first.
   if (connection && sessionReady(connection)) { window.open(connection.url, '_blank', 'noopener'); return; }
   if (connection) { navigate(`#/s/${connection.id}`); return; }
-  askLaunch({ deviceId: item.deviceId, path: item.path, permissionMode: modeFor(deviceById(item.deviceId)) });
+  askLaunch({ deviceId: item.deviceId, path: item.path, permissionMode: item.mode && MODE_LABELS[item.mode] ? item.mode : modeFor(deviceById(item.deviceId)) });
 }
 
 /* ---------- session page ---------- */
@@ -1585,7 +1611,7 @@ function mountSession(session) {
   meta.append(refs.pill, refs.device, refs.mode, refs.time); titles.append(refs.title, meta);
   refs.pin = iconButton('pin', 's-tool', 'Pin to the top', () => togglePin(sv.id));
   refs.rename = iconButton('pencil', 's-tool', 'Rename', startRename);
-  const tools = el('div', 's-tools'); tools.append(refs.pin, refs.rename);
+  const tools = el('div', 's-tools'); refs.pin.hidden = true; tools.append(refs.pin, refs.rename);
   head.append(titles, tools);
   refs.path = el('code', 'code-block s-path');
   refs.stage = el('div'); refs.actions = el('div'); refs.notes = el('div'); refs.details = el('div');
@@ -1600,7 +1626,7 @@ function mountSession(session) {
 function patchHead(vm, first) {
   const refs = sv.refs;
   setText(refs.title, vm.title);
-  setClass(refs.pin, `icon-btn xs s-tool${vm.pinned ? ' on' : ''}`); setAttr(refs.pin, 'aria-pressed', String(vm.pinned));
+  setClass(refs.pin, `icon-btn xs s-tool${vm.pinned ? ' on' : ''}`); refs.pin.hidden = true; setAttr(refs.pin, 'aria-pressed', String(vm.pinned));
   const pinLabel = vm.pinned ? 'Unpin' : 'Pin to the top'; setAttr(refs.pin, 'aria-label', pinLabel); setAttr(refs.pin, 'title', pinLabel);
   setText(refs.path, vm.path); setAttr(refs.path, 'title', vm.path);
   const pillClass = `pill ${vm.status.cls}`.trim();
