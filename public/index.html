@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Anywhere">
-  <meta name="description" content="Start, open and stop Claude Code sessions on your own machines.">
+  <meta name="description" content="Start Claude Code conversations on your own machines, from your phone.">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="apple-touch-icon" href="/icon-192.png">
@@ -42,10 +42,10 @@
     <div id="edge-swipe" class="edge-swipe" aria-hidden="true"></div>
     <aside id="sidebar" class="sidebar" aria-label="Sessions and devices">
       <div class="sidebar-head">
-        <a class="brand" href="#/" aria-label="Anywhere, new session"><span class="spark" aria-hidden="true"></span><span>Anywhere</span></a>
+        <a class="brand" href="#/" aria-label="Anywhere, new conversation"><span class="spark" aria-hidden="true"></span><span>Anywhere</span></a>
         <button class="icon-btn only-mobile" id="close-sidebar" type="button" aria-label="Close menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
       </div>
-      <a class="new-session" href="#/"><span class="plus" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>New session</a>
+      <a class="new-session" href="#/"><span class="plus" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span>New conversation</a>
       <div class="sidebar-scroll" id="sidebar-scroll">
         <div class="side-group" id="pinned-group" hidden>
           <div class="side-label"><button class="side-toggle" type="button" data-collapse="pinned" aria-expanded="true"><svg class="side-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg><span>Pinned</span></button></div>
@@ -73,8 +73,8 @@
     <div class="main-col" id="main-col">
       <header class="topbar">
         <button class="icon-btn only-mobile" id="open-sidebar" type="button" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg><span id="menu-badge" class="menu-badge" hidden></span></button>
-        <div class="topbar-title" id="topbar-title">New session</div>
-        <a class="icon-btn only-mobile" id="topbar-new" href="#/" aria-label="New session"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></a>
+        <div class="topbar-title" id="topbar-title">New conversation</div>
+        <a class="icon-btn only-mobile" id="topbar-new" href="#/" aria-label="New conversation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></a>
       </header>
       <div id="offline-banner" class="banner" role="status" hidden>You're offline. Reconnect to reach your devices.</div>
       <p id="global-error" class="banner banner-error" role="alert" hidden></p>
@@ -143,17 +143,17 @@
       <p class="dialog-meta" id="trust-device"></p>
       <code id="trust-path" class="code-block"></code>
       <p class="dialog-text" id="trust-text"></p>
-      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-primary" value="start">Start session</button></div>
+      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-primary" value="start">Start</button></div>
     </form>
   </dialog>
 
   <dialog id="stop-dialog" class="dialog">
     <form method="dialog">
-      <h2 class="serif">Stop this session?</h2>
+      <h2 class="serif">Stop this connection?</h2>
       <p class="dialog-meta" id="stop-device"></p>
       <code id="stop-path" class="code-block"></code>
-      <p class="dialog-text">Claude will be shut down on that device. Anything it is doing in this folder right now will be interrupted, and its link will stop working. You can start it again later.</p>
-      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-danger" value="stop">Stop session</button></div>
+      <p class="dialog-text">Claude will be shut down in this folder on that device, with every conversation running there. Your conversations stay in the Claude app. You can start it again later.</p>
+      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-danger" value="stop">Stop connection</button></div>
     </form>
   </dialog>
 

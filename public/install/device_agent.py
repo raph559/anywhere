@@ -28,8 +28,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = 7
-CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode", "permission-mode-auto"]
+VERSION = 8
+CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode", "permission-mode-auto", "conversations"]
 PERMISSION_MODES = ("default", "acceptEdits", "auto", "bypassPermissions")
 # Only code signed with the matching private key (kept root-only on the hub server,
 # never readable by the web service) is installed by the self-updater. Each install
@@ -334,7 +334,7 @@ def claude_args(executable, label, path, supports_no_chrome=True, permission_mod
         raise AgentError("invalid_mode", "Unsupported permission mode.")
     title = f"{label} · {path.name or str(path)}"
     title = "".join(c for c in title if c.isprintable())[:120]
-    args = [str(executable), "remote-control", "--name", title, "--remote-control-session-name-prefix", label, "--spawn", "same-dir", "--capacity", "4", "--permission-mode", permission_mode]
+    args = [str(executable), "remote-control", "--name", title, "--remote-control-session-name-prefix", label, "--spawn", "same-dir", "--capacity", "8", "--permission-mode", permission_mode]
     if supports_no_chrome:
         args.append("--no-chrome")
     return args
@@ -455,6 +455,11 @@ class DeviceAgent:
         self.commands = read_json(self.commands_file, {})
         self.mappings_file = self.state / "sessions.json"
         self.mappings = read_json(self.mappings_file, {})
+        self.conversations_file = self.state / "conversations.json"
+        self.conversation_history = read_json(self.conversations_file, {})
+        if not isinstance(self.conversation_history, dict):
+            self.conversation_history = {}
+        self.conversations_sent = (None, 0.0)
         self.broker_processes = {}
         self.exe = self.config.get("claudePath") or shutil.which("claude")
         if not self.exe or not Path(self.exe).is_absolute() or not Path(self.exe).is_file():
@@ -653,12 +658,72 @@ class DeviceAgent:
         atomic_json(self.commands_file, self.commands)
         return response
 
+    def claude_dir(self):
+        configured = self.config.get("claudeConfigDir") or os.environ.get("CLAUDE_CONFIG_DIR")
+        return Path(os.path.expanduser(configured)) if configured else Path.home() / ".claude"
+
+    def conversations(self):
+        """Claude conversations reachable from the Claude app, read from Claude's own registry of running processes.
+
+        Only metadata is read (name, folder, busy/idle, app link); never transcripts or the *.key files.
+        Ended conversations stay listed for a while from the agent's own history.
+        """
+        live = {}
+        try:
+            entries = list((self.claude_dir() / "sessions").glob("*.json"))[:500]
+        except OSError:
+            entries = []
+        for file in entries:
+            info = read_json(file, {})
+            if not isinstance(info, dict):
+                continue
+            link_id, local_id, cwd = info.get("bridgeSessionId"), info.get("sessionId"), info.get("cwd")
+            if not (isinstance(link_id, str) and re.fullmatch(r"session_[A-Za-z0-9]{8,64}", link_id) and isinstance(local_id, str) and ID_RE.fullmatch(local_id) and isinstance(cwd, str)):
+                continue
+            identity = process_identity(info.get("pid"))
+            if not identity or (os.name != "nt" and str(info.get("procStart", identity["created"])) != identity["created"]):
+                continue
+            try:
+                folder = str(self.policy.resolve(cwd))
+            except AgentError:
+                continue
+            name = info.get("name") if isinstance(info.get("name"), str) else ""
+            status = info.get("status") if info.get("status") in ("busy", "idle", "waiting") else "idle"
+            def stamp(value):
+                return int(value) if isinstance(value, (int, float)) and value > 0 else None
+            live[local_id] = {"id": local_id, "url": f"https://claude.ai/code/{link_id}", "title": "".join(c for c in name if c.isprintable())[:120],
+                              "path": folder, "status": status, "startedAt": stamp(info.get("startedAt")), "updatedAt": stamp(info.get("updatedAt")), "live": True}
+        now_ms = int(time.time() * 1000)
+        history = self.conversation_history
+        for key, item in live.items():
+            history[key] = dict(item)
+        for key, item in list(history.items()):
+            if key not in live and item.get("live"):
+                history[key] = dict(item, live=False, status="ended", endedAt=now_ms)
+        # Keep the 60 most recent, at most 30 days old.
+        recent = sorted(history.values(), key=lambda item: item.get("endedAt") or item.get("updatedAt") or 0, reverse=True)
+        recent = [item for item in recent if item.get("live") or now_ms - (item.get("endedAt") or 0) < 30 * 86400 * 1000][:60]
+        self.conversation_history = {item["id"]: item for item in recent}
+        snapshot = json.dumps(recent, sort_keys=True)
+        if snapshot != self.conversations_sent[0]:
+            atomic_json(self.conversations_file, self.conversation_history)
+        return recent, snapshot
+
     def poll(self, results):
         # Reap brokers that finished without owning the lifetime of live ones.
         for pid, process in list(self.broker_processes.items()):
             if process.poll() is not None:
                 del self.broker_processes[pid]
-        body = json.dumps({"version": VERSION, "device": self.descriptor(), "sessions": self.sessions(), "results": results}).encode()
+        payload = {"version": VERSION, "device": self.descriptor(), "sessions": self.sessions(), "results": results}
+        try:
+            items, snapshot = self.conversations()
+            # Send the list when it changes, and at least every 2 minutes so a restarted hub catches up.
+            if snapshot != self.conversations_sent[0] or time.monotonic() - self.conversations_sent[1] > 120:
+                payload["conversations"] = items
+                self.conversations_sent = (snapshot, time.monotonic())
+        except (OSError, ValueError, TypeError):
+            pass
+        body = json.dumps(payload).encode()
         request = urllib.request.Request(f"{self.hub}/api/agents/{urllib.parse.quote(self.device_id, safe='')}/poll", data=body, headers={"Authorization": f"Bearer {self.secret}", "Content-Type": "application/json", "User-Agent": "ClaudeDeviceLauncher/1"}, method="POST")
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *_args, **_kwargs):

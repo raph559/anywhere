@@ -6,7 +6,7 @@
 
 **Start Claude Code anywhere on any of your machines — from your phone.**
 
-Pick a computer, pick a folder, tap Start. Anywhere opens a Claude Code session there and gives you the link to continue in the Claude app.
+Pick a computer, pick a folder, tap Start. Anywhere opens Claude Code there and gives you the link to continue in the Claude app — then lists your conversations on every machine so you can jump back into any of them.
 
 [Install](#install) · [How it works](#how-it-works) · [Security](#security) · [FAQ](#faq)
 
@@ -33,6 +33,7 @@ Pick a computer, pick a folder, tap Start. Anywhere opens a Claude Code session 
 Claude Code's [Remote Control](https://docs.claude.com/en/docs/claude-code) lets you drive a session from the Claude app — but someone still has to start it on the machine. Anywhere is that someone:
 
 - 🖥️ **All your machines in one list** — Linux servers, WSL and Windows PCs.
+- 💬 **Your conversations, by machine** — see which ones are working or idle, open any of them in the Claude app, or start a new one in the same folder.
 - 📂 **Browse folders** and start Claude where your project is.
 - ⏱️ **Watch it start live**, answer Claude's first questions (folder trust…) from your phone.
 - ⏹️ **Stop, restart, rename, pin** your sessions.
@@ -111,7 +112,7 @@ Open the same address on your phone, sign in, then **Share → Add to Home Scree
 
 - The **hub** is a single Node.js file that serves the app and passes commands along. It never sees your Claude login.
 - Each **agent** is a single Python file. It connects *out* to the hub (no ports to open on your computers), browses folders inside your home folder, and starts or stops `claude remote-control`.
-- Your conversations happen in the official Claude app; Anywhere only manages the sessions.
+- Your conversations happen in the official Claude app. Anywhere starts and stops the Remote Control connection in each folder (up to 8 conversations at once), and lists the conversations each agent finds in Claude's local registry of running processes: name, folder, working/idle and app link only, never their content.
 
 ## Security
 

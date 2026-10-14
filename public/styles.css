@@ -231,6 +231,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .dot.starting, .dot.stopping, .dot.attention { background: var(--warn); opacity: 1; }
 .dot.starting, .dot.stopping { animation: blink 1.4s ease-in-out infinite; }
 .dot.failed { background: var(--danger); opacity: 1; }
+.dot.working { background: var(--accent); opacity: 1; animation: blink 1.4s ease-in-out infinite; }
 
 .main-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .topbar { height: 52px; display: flex; align-items: center; gap: 6px; padding: 0 16px; flex-shrink: 0; }
@@ -368,6 +369,7 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
 .pill.ready { color: var(--success); background: color-mix(in srgb, var(--success) 14%, transparent); }
 .pill.starting, .pill.stopping, .pill.attention { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
 .pill.failed { color: var(--danger); background: var(--danger-soft); }
+.pill.working { color: var(--accent); background: var(--accent-soft); }
 .pill .dot { width: 6px; height: 6px; }
 .pill-label { display: inline-block; }
 .code-block { display: block; font-family: var(--mono); font-size: 13px; line-height: 1.6; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); overflow-wrap: anywhere; white-space: pre-wrap; color: var(--text-2); }
@@ -385,6 +387,8 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
 .s-note.error { color: var(--danger); }
 .s-keep { display: flex; align-items: center; gap: 16px; width: 100%; margin-top: 22px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); text-align: left; cursor: pointer; transition: background-color var(--dur-fast), border-color var(--dur-fast); }
 .s-keep[hidden] { display: none; }
+.s-conn { display: flex; align-items: center; gap: 16px; margin-top: 22px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); color: inherit; text-decoration: none; transition: background-color var(--dur-fast), border-color var(--dur-fast); }
+.s-conn > svg { width: 16px; height: 16px; fill: none; stroke: var(--text-3); stroke-width: 1.8; flex-shrink: 0; }
 .s-keep-label { display: grid; gap: 2px; flex: 1; min-width: 0; }
 .s-keep-title { font-size: 14px; font-weight: 500; color: var(--text); }
 .s-keep-hint { font-size: 12.5px; color: var(--text-3); line-height: 1.4; }
@@ -490,6 +494,7 @@ main { flex: 1; overflow-y: auto; outline: none; padding: 0 16px calc(28px + env
   .side-action:hover, .foot-btn:hover { color: var(--text); background: var(--hover); }
   .mode-button:hover:not(:disabled) { background: var(--hover); color: var(--text); }
   .mode-option:hover { background: var(--hover); }
+  .s-conn:hover { background: var(--hover); border-color: var(--border-strong); }
   .s-keep:hover { background: var(--hover); border-color: var(--border-strong); }
   .jump-card:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-2); }
   .toast-action:hover { background: rgba(127, 127, 127, .16); }

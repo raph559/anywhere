@@ -16,12 +16,13 @@ const safeText=(value,max=4096)=>typeof value==='string'?value.slice(0,max):'';
 export function createLauncher({config,statePath,publicDir=resolve(HERE,'../public'),clock=now}={}){
   if(!config?.loginTokenHash||!Array.isArray(config.devices))throw Error('Missing launcher configuration');
   const configured=new Map(config.devices.map(d=>[d.id,d]));
-  let state={sessions:[],browserSessions:{},devices:{},commands:[],prefs:{deviceOrder:[],hiddenDevices:[]},enrolled:[],enrollCodes:{}};
+  let state={sessions:[],browserSessions:{},devices:{},commands:[],prefs:{deviceOrder:[],hiddenDevices:[]},enrolled:[],enrollCodes:{},conversations:{}};
   if(statePath&&existsSync(statePath))state={...state,...JSON.parse(readFileSync(statePath,'utf8'))};
   state.commands=state.commands.filter(c=>c.type!=='browse');
   // Devices added from the app ("Add a device") live in the state file next to the configured ones.
   if(!Array.isArray(state.enrolled))state.enrolled=[];if(!state.enrollCodes||typeof state.enrollCodes!=='object')state.enrollCodes={};
   for(const d of state.enrolled)if(!configured.has(d.id))configured.set(d.id,{...d,roots:[],defaultPath:'',enrolled:true});
+  if(!state.conversations||typeof state.conversations!=='object'||Array.isArray(state.conversations))state.conversations={};
   state.prefs={deviceOrder:Array.isArray(state.prefs?.deviceOrder)?state.prefs.deviceOrder:[],hiddenDevices:Array.isArray(state.prefs?.hiddenDevices)?state.prefs.hiddenDevices:[]};
   // Device order and visibility are shared by every signed-in browser.
   function orderedDevices(){const order=state.prefs.deviceOrder,rank=id=>{const i=order.indexOf(id);return i<0?order.length:i;};return [...configured.values()].map((d,i)=>[d,i]).sort((a,b)=>rank(a[0].id)-rank(b[0].id)||a[1]-b[1]).map(([d])=>({...deviceView(d),hidden:state.prefs.hiddenDevices.includes(d.id)}));}
@@ -88,6 +89,18 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
     s.updatedAt=clock();
     if(s.status!=='starting'){delete s.trustPending;delete s.confirmingNonce;}
   }
+  // Conversations the device found in Claude's own registry; only the app link, name, folder and status are kept.
+  function cleanConversation(c){
+    if(!c||typeof c!=='object'||typeof c.id!=='string'||!/^[A-Za-z0-9_-]{8,80}$/.test(c.id))return null;
+    if(typeof c.url!=='string'||!/^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]{8,64}$/.test(c.url)||typeof c.path!=='string'||!c.path||c.path.length>4096)return null;
+    const num=v=>Number.isFinite(v)&&v>0?Math.floor(v):null;
+    return {id:c.id,url:c.url,title:safeText(c.title,120),path:safeText(c.path),status:['busy','idle','waiting','ended'].includes(c.status)?c.status:'idle',live:c.live===true,startedAt:num(c.startedAt),updatedAt:num(c.updatedAt),endedAt:num(c.endedAt)};
+  }
+  function conversationsView(){
+    const out=[];
+    for(const d of configured.values()){const view=deviceView(d);for(const c of state.conversations[d.id]||[]){const live=c.live&&view.online;if(!live&&(c.endedAt||c.updatedAt||0)<=(state.conversationsClearedAt||0))continue;out.push({...c,live,status:live?c.status:'ended',deviceId:d.id,deviceName:d.name});}}
+    return out;
+  }
   // "Restart after reboot": bring a session back when its device reports that Claude stopped without being asked to.
   function restartSession(s){
     if(state.commands.some(c=>c.type==='launch'&&c.args.sessionId===s.id))return;
@@ -111,6 +124,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       if(cmd.type==='launch'||cmd.type==='confirm'){const session=state.sessions.find(s=>s.id===cmd.args.sessionId&&s.deviceId===deviceId);if(session){if(item.ok)applySessionResult(session,item.result||{});else{session.status='failed';session.error=safeText(typeof item.error==='string'?item.error:item.error?.message||'Claude could not start.',1200);session.updatedAt=clock();delete session.trustPending;delete session.confirmingNonce;}}}
       state.commands=state.commands.filter(c=>c.id!==cmd.id);
     }
+    if(Array.isArray(input.conversations))state.conversations[deviceId]=input.conversations.slice(0,100).map(cleanConversation).filter(Boolean);
     // Only the newest session in a folder follows the device's report; older entries for that folder keep their final state.
     const newest=new Map();for(const s of state.sessions)if(s.deviceId===deviceId)newest.set(s.path,s);
     for(const update of Array.isArray(input.sessions)?input.sessions.slice(0,200):[]){const s=state.sessions.find(s=>s.deviceId===deviceId&&s.id===update.id);if(!s||newest.get(s.path)!==s)continue;const before=s.status;applySessionResult(s,update);if(s.keepAlive&&ACTIVE.includes(before)&&s.status==='offline')restartSession(s);}
@@ -146,6 +160,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
         const mutation=!['GET','HEAD'].includes(req.method);if(!requireAuth(req,res,mutation))return;
         if(route==='/api/logout'&&req.method==='POST'){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('anywhere_session='))?.slice(17);if(token)delete state.browserSessions[hash(token)];save(true);res.setHeader('Set-Cookie','anywhere_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');json(res,200,{ok:true});return;}
         if(route==='/api/devices'&&req.method==='GET'){json(res,200,{devices:orderedDevices()});return;}
+        if(route==='/api/conversations'&&req.method==='GET'){json(res,200,{conversations:conversationsView()});return;}
         if(route==='/api/enrollments'&&req.method==='POST'){
           const input=await body(req);const name=typeof input.name==='string'?input.name.replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,40):'';
           if(!name||!OSES.includes(input.os)){json(res,400,{error:'Give the device a name and pick its system.'});return;}
@@ -157,7 +172,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
         if(forgetMatch&&req.method==='DELETE'){
           const id=forgetMatch[1];const index=state.enrolled.findIndex(d=>d.id===id);if(index<0){json(res,409,{error:'Only devices added from the app can be removed here; edit the hub configuration for the others.'});return;}
           state.enrolled.splice(index,1);configured.delete(id);delete state.devices[id];state.commands=state.commands.filter(c=>c.deviceId!==id);
-          state.prefs.deviceOrder=state.prefs.deviceOrder.filter(x=>x!==id);state.prefs.hiddenDevices=state.prefs.hiddenDevices.filter(x=>x!==id);save(true);json(res,200,{devices:orderedDevices()});return;
+          state.prefs.deviceOrder=state.prefs.deviceOrder.filter(x=>x!==id);state.prefs.hiddenDevices=state.prefs.hiddenDevices.filter(x=>x!==id);delete state.conversations[id];save(true);json(res,200,{devices:orderedDevices()});return;
         }
         if(route==='/api/prefs'&&req.method==='PUT'){const input=await body(req);const ids=v=>Array.isArray(v)?[...new Set(v.filter(id=>typeof id==='string'&&configured.has(id)))]:null;const order=ids(input.deviceOrder),hidden=ids(input.hiddenDevices);if(order)state.prefs.deviceOrder=order;if(hidden)state.prefs.hiddenDevices=hidden;save(true);json(res,200,{devices:orderedDevices()});return;}
         if(route==='/api/browse'&&req.method==='GET'){
@@ -203,7 +218,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
           json(res,202,{session:sessionView(s)});return;
         }
         if(route==='/api/sessions/clear'&&req.method==='POST'){
-          const before=state.sessions.length;state.sessions=state.sessions.filter(s=>ACTIVE.includes(s.status)||s.pinned);save(true);
+          const before=state.sessions.length;state.sessions=state.sessions.filter(s=>ACTIVE.includes(s.status)||s.pinned);state.conversationsClearedAt=clock();save(true);
           json(res,200,{removed:before-state.sessions.length});return;
         }
         const sessionMatch=route.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)$/);

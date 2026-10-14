@@ -13,7 +13,7 @@ const state = {
   mode: 'auto', launching: false, pendingLaunch: null, pendingStop: null, installPrompt: null,
   polls: new Map(), confirmingTrust: new Set(), submittedTrust: new Map(), trustErrors: new Map(),
   launchAttempts: new Map(), sessionChecks: new Map(), sessionFirstSeen: new Map(), actionErrors: new Map(), busy: new Set(),
-  pendingRemovals: new Map(), pendingClear: null, editDevices: false
+  pendingRemovals: new Map(), pendingClear: null, editDevices: false, conversations: []
 };
 const ACTIVE = ['ready', 'starting'];
 const MODE_LABELS = { auto: 'Auto', bypassPermissions: 'Bypass permissions', acceptEdits: 'Accept edits', default: 'Ask' };
@@ -221,6 +221,8 @@ function formatTime(value, format) {
   if (format === 'for') return `Running for ${duration(seconds)}`;
   if (format === 'started') return `Started ${relativeTime(value)}`;
   if (format === 'dot-ago') return ` · ${relativeTime(value)}`;
+  if (format === 'active') return `Active ${relativeTime(value)}`;
+  if (format === 'ended') return `Ended ${relativeTime(value)}`;
   return relativeTime(value);
 }
 function timeNode(value, format, className = '') {
@@ -333,6 +335,17 @@ function statusOf(session) {
   if (sessionReady(session)) return { cls: 'ready', label: 'Running' };
   return ({ starting: { cls: 'starting', label: 'Starting' }, stopped: { cls: '', label: 'Stopped' }, failed: { cls: 'failed', label: 'Failed' }, offline: { cls: '', label: 'Ended' } })[session.status] || { cls: '', label: 'Unknown' };
 }
+/* ---------- conversations (read from Claude's registry on each device) ---------- */
+function liveConversations() { return state.conversations.filter((item) => item.live).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); }
+function endedConversations() { return state.conversations.filter((item) => !item.live).sort((a, b) => (b.endedAt || b.updatedAt || 0) - (a.endedAt || a.updatedAt || 0)); }
+function conversationHash(item) { return `#/c/${encodeURIComponent(item.deviceId)}/${encodeURIComponent(item.id)}`; }
+function conversationTitle(item) { return item.title || folderName(item.path); }
+function conversationStatus(item) {
+  if (!item.live) return { cls: '', label: 'Ended' };
+  if (item.status === 'busy') return { cls: 'working', label: 'Working' };
+  if (item.status === 'waiting') return { cls: 'attention', label: 'Waiting for you' };
+  return { cls: 'ready', label: 'Idle' };
+}
 function findSession(id) { return state.sessions.find((session) => session.id === id) || null; }
 function visibleSessions() { return state.sessions.filter((session) => !state.pendingRemovals.has(session.id) && !state.pendingClear?.ids.has(session.id)); }
 function activeSessionAt(deviceId, path) {
@@ -443,7 +456,11 @@ async function openWorkspace() {
 }
 
 /* ---------- routing ---------- */
-function parseRoute() { const match = location.hash.match(/^#\/s\/([A-Za-z0-9-]+)$/); return match ? { view: 'session', id: match[1] } : { view: 'new', id: '' }; }
+function parseRoute() {
+  const conversation = location.hash.match(/^#\/c\/([A-Za-z0-9_-]+)\/([A-Za-z0-9_-]+)$/);
+  if (conversation) return { view: 'conversation', deviceId: conversation[1], id: conversation[2] };
+  const match = location.hash.match(/^#\/s\/([A-Za-z0-9-]+)$/); return match ? { view: 'session', id: match[1] } : { view: 'new', id: '' };
+}
 function navigate(hash) { if (location.hash !== hash) location.hash = hash; else route(); }
 function setTopbarTitle(text) {
   const node = $('topbar-title'); if (node.textContent === text) return;
@@ -452,11 +469,11 @@ function setTopbarTitle(text) {
 }
 function route() {
   const previous = state.route; state.route = parseRoute();
-  const changed = previous.view !== state.route.view || previous.id !== state.route.id;
+  const changed = previous.view !== state.route.view || previous.id !== state.route.id || previous.deviceId !== state.route.deviceId;
   closeDrawer();
   if (!state.authenticated) return;
-  if (changed) Object.assign(sv, { id: null, placeholder: '' });
-  const isSession = state.route.view === 'session';
+  if (changed) { Object.assign(sv, { id: null, placeholder: '' }); cv.sig = ''; }
+  const isSession = state.route.view !== 'new';
   setVisible('new-view', !isSession); setVisible('session-view', isSession);
   renderAll();
   if (changed) {
@@ -559,7 +576,7 @@ function slideOpen(list) {
   const done = () => { list.style.overflow = ''; };
   if (animation) animation.finished.then(done, done); else done();
 }
-function deviceHasActive(id, sessions = visibleSessions()) { return sessions.some((session) => session.deviceId === id && sessionActive(session) && !session.pinned); }
+function deviceHasActive(id, sessions = visibleSessions()) { return sessions.some((session) => session.deviceId === id && sessionActive(session) && !session.pinned) || liveConversations().some((item) => item.deviceId === id); }
 function renderSideDevices() {
   const sessions = visibleSessions();
   const shown = state.devices.filter((device) => !device.hidden || deviceHasActive(device.id, sessions));
@@ -588,13 +605,19 @@ function createDeviceGroup(device) {
   toggle.addEventListener('click', () => toggleCollapsed(`dev:${group._key}`));
   const actions = el('span', 'dev-actions');
   actions.append(iconButton('eye', 'dev-eye', 'Hide', () => toggleDeviceHidden(group._key)),
-    iconButton('plus', 'dev-add', 'New session', () => { navigate('#/'); pickDevice(group._key); }));
+    iconButton('plus', 'dev-add', 'New conversation', () => { navigate('#/'); pickDevice(group._key); }));
   head.append(toggle, actions);
   group.append(head, el('div', 'side-list dev-sessions'));
   return group;
 }
+function deviceItems(device) {
+  const conversations = liveConversations().filter((item) => item.deviceId === device.id).map((item) => ({ kind: 'c', item }));
+  const connections = visibleSessions().filter((session) => session.deviceId === device.id && sessionActive(session) && !session.pinned
+    && !conversations.some(({ item }) => samePath(device.id, item.path, session.path))).map((item) => ({ kind: 's', item }));
+  return [...conversations, ...connections];
+}
 function updateDeviceGroup(group, device) {
-  const sessions = visibleSessions().filter((session) => session.deviceId === device.id && sessionActive(session) && !session.pinned);
+  const sessions = deviceItems(device);
   const connected = online(device); const folded = isCollapsed(`dev:${device.id}`) && sessions.length > 0;
   const name = device.name || device.id;
   setClass(group, `dev-group${connected ? '' : ' offline'}${device.hidden ? ' is-hidden' : ''}${folded ? ' folded' : ''}${sessions.length ? ' has-sessions' : ''}${group.classList.contains('dragging') ? ' dragging' : ''}${group.classList.contains('show-actions') ? ' show-actions' : ''}`);
@@ -606,12 +629,12 @@ function updateDeviceGroup(group, device) {
   setText(toggle.querySelector('.dev-name'), name);
   setText(toggle.querySelector('.dev-count'), sessions.length ? String(sessions.length) : '');
   setClass(toggle.querySelector('.dot'), `dot${connected ? ' online' : ''}`);
-  setAttr(add, 'aria-label', `New session on ${name}`); setAttr(add, 'title', `New session on ${name}`); setProp(add, 'disabled', !connected);
+  setAttr(add, 'aria-label', `New conversation on ${name}`); setAttr(add, 'title', `New conversation on ${name}`); setProp(add, 'disabled', !connected);
   const eyeName = device.hidden ? 'eyeOff' : 'eye';
   if (eye._icon !== eyeName) { eye._icon = eyeName; eye.replaceChildren(icon(eyeName)); }
   const eyeLabel = device.hidden ? `Show ${name}` : `Hide ${name}`; setAttr(eye, 'aria-label', eyeLabel); setAttr(eye, 'title', eyeLabel);
   setVisible(list, sessions.length > 0 && !folded);
-  reconcile(list, folded ? [] : sessions, { key: (session) => session.id, create: createSideSession, update: (row, session) => updateSideSession(row, session, false) });
+  reconcile(list, folded ? [] : sessions, { key: sideKey, create: createSideSession, update: (row, entry) => updateSideEntry(row, entry, false) });
 }
 // Drag a device to reorder: with a mouse after a small move, on touch after holding ~0.4 s.
 let deviceDrag = null;
@@ -898,7 +921,7 @@ function updateLaunchButton() {
   button.classList.toggle('is-launching', state.launching);
   button.classList.toggle('is-open', !!running && !state.launching);
   setText(button.querySelector('.send-label'), state.launching ? 'Starting…' : running ? 'Open' : 'Start');
-  setAttr(button, 'aria-label', running ? `Open the running session in ${folderName(state.directory.path)}` : 'Start Claude in this folder');
+  setAttr(button, 'aria-label', running ? `Open a new conversation in ${folderName(state.directory.path)}` : 'Start Claude in this folder');
   setProp($('folder-path'), 'disabled', !state.selected || state.launching);
   const modes = supportsModes(state.selected); const select = $('mode-select');
   setProp(select, 'disabled', (!!state.selected && !modes) || state.launching || !!running);
@@ -1086,7 +1109,14 @@ async function refreshSessions() {
   for (const session of state.sessions) if (needsPolling(session) && !state.polls.has(session.id)) pollSession(session.id);
   renderAll();
 }
-function refreshAll() { return Promise.allSettled([refreshDevices(), refreshSessions()]); }
+async function refreshConversations() {
+  const generation = state.authGeneration;
+  const data = await api('/api/conversations');
+  if (!current(generation)) return;
+  state.conversations = (Array.isArray(data.conversations) ? data.conversations : []).filter((item) => item && safeClaudeUrl(item.url));
+  renderAll();
+}
+function refreshAll() { return Promise.allSettled([refreshDevices(), refreshSessions(), refreshConversations()]); }
 
 /* ---------- trust confirmation ---------- */
 async function confirmNativeTrust(id, nonce) {
@@ -1154,10 +1184,10 @@ async function commitRemoval(id, { keepalive = false } = {}) {
 }
 function clearHistory() {
   if (state.pendingClear) return;
-  const ids = new Set(visibleSessions().filter((session) => !sessionActive(session)).map((session) => session.id)); if (!ids.size) return;
+  const ids = new Set(visibleSessions().filter((session) => !sessionActive(session)).map((session) => session.id)); if (!ids.size && !endedConversations().length) return;
   const viewing = ids.has(state.route.id);
   state.pendingClear = { ids, timer: setTimeout(() => commitClear(), 5000), committing: false };
-  toast(`Cleared ${ids.size} finished ${ids.size === 1 ? 'session' : 'sessions'}.`, { key: 'clear', duration: 5000, action: { label: 'Undo', run: undoClear } });
+  toast('History cleared.', { key: 'clear', duration: 5000, action: { label: 'Undo', run: undoClear } });
   if (viewing) navigate('#/'); else renderAll();
 }
 function undoClear() { if (!state.pendingClear || state.pendingClear.committing) return; clearTimeout(state.pendingClear.timer); state.pendingClear = null; renderAll(); }
@@ -1188,8 +1218,8 @@ function shareLink(id) {
 function renderAll() {
   if (!state.authenticated) return;
   renderDeviceChips(); renderSideDevices(); renderSidebarSessions(); renderRecent(); renderJumpBack(); updateFolderBadges(); updateLaunchButton();
-  const isSession = state.route.view === 'session';
-  if (isSession) renderSessionView(); else setTopbarTitle('New session');
+  const isSession = state.route.view !== 'new';
+  if (state.route.view === 'session') renderSessionView(); else if (state.route.view === 'conversation') renderConversationView(); else setTopbarTitle('New conversation');
   for (const link of document.querySelectorAll('.new-session')) link.classList.toggle('current', !isSession);
   $('shell').classList.toggle('is-home', !isSession);
   const plus = $('topbar-new'); const visibility = isSession ? 'visible' : 'hidden';
@@ -1216,14 +1246,17 @@ function syncAttention() {
 function renderSidebarSessions() {
   const sessions = visibleSessions();
   const pinned = sessions.filter((session) => session.pinned);
-  const history = sessions.filter((session) => !sessionActive(session) && !session.pinned);
+  const history = [
+    ...(state.pendingClear ? [] : endedConversations().slice(0, 20)).map((item) => ({ kind: 'c', item })),
+    ...sessions.filter((session) => session.status === 'failed' && !session.pinned).map((item) => ({ kind: 's', item }))
+  ];
   for (const key of ['pinned', 'history']) setAttr(document.querySelector(`[data-collapse="${key}"]`), 'aria-expanded', String(!isCollapsed(key)));
   setVisible('pinned-group', pinned.length > 0);
   setVisible('pinned-list', !isCollapsed('pinned'));
   reconcile($('pinned-list'), isCollapsed('pinned') ? [] : pinned, { key: (session) => session.id, create: createSideSession, update: (row, session) => updateSideSession(row, session, true) });
   setVisible('history-group', history.length > 0);
   setVisible('history-list', !isCollapsed('history'));
-  reconcile($('history-list'), isCollapsed('history') ? [] : history.slice(0, 30), { key: (session) => session.id, create: createSideSession, update: (row, session) => updateSideSession(row, session, true) });
+  reconcile($('history-list'), isCollapsed('history') ? [] : history.slice(0, 30), { key: sideKey, create: createSideSession, update: (row, entry) => updateSideEntry(row, entry, true) });
 }
 function createSideSession() {
   const row = el('div', 'side-row');
@@ -1234,6 +1267,24 @@ function createSideSession() {
   item.append(main, el('span', 'dot'));
   row.append(item, iconButton('pin', 'side-pin', 'Pin', () => togglePin(row._key)));
   return row;
+}
+function sideKey(entry) { return `${entry.kind}:${entry.kind === 'c' ? `${entry.item.deviceId}/${entry.item.id}` : entry.item.id}`; }
+function updateSideEntry(row, entry, withDevice) {
+  setVisible(row.children[1], entry.kind === 's');
+  if (entry.kind === 's') updateSideSession(row, entry.item, withDevice); else updateSideConversation(row, entry.item, withDevice);
+}
+function updateSideConversation(row, item, withDevice) {
+  const status = conversationStatus(item); const selected = state.route.view === 'conversation' && state.route.id === item.id && state.route.deviceId === item.deviceId;
+  const [link] = row.children; const [main, dot] = link.children; const [title, sub] = main.children; const [text, time] = sub.children;
+  setAttr(link, 'href', conversationHash(item));
+  setClass(link, `side-item${selected ? ' current' : ''}${item.live ? '' : ' muted'}`);
+  setAttr(link, 'aria-current', selected ? 'page' : null);
+  setText(title, conversationTitle(item)); setAttr(title, 'title', item.path || null);
+  setText(text, [withDevice ? item.deviceName || deviceName(item.deviceId) : folderName(item.path), status.label].join(' · '));
+  const when = item.live ? '' : (item.endedAt || item.updatedAt || '');
+  setAttr(time, 'data-ts', when ? new Date(when).toISOString() : null); setAttr(time, 'data-fmt', when ? 'dot-ago' : null);
+  setText(time, when ? formatTime(new Date(when).toISOString(), 'dot-ago') : '');
+  setClass(dot, `dot ${status.cls}`.trim());
 }
 function updateSideSession(row, session, withDevice) {
   const status = statusOf(session); const selected = state.route.id === session.id; const active = sessionActive(session);
@@ -1250,6 +1301,68 @@ function updateSideSession(row, session, withDevice) {
   setClass(dot, `dot ${status.cls}`.trim());
   setClass(pin, `icon-btn xs side-pin${session.pinned ? ' on' : ''}`);
   const label = session.pinned ? 'Unpin' : 'Pin to the top'; setAttr(pin, 'aria-label', label); setAttr(pin, 'title', label);
+}
+
+/* ---------- conversation page ---------- */
+const cv = { sig: '' };
+function renderConversationView() {
+  const view = $('session-view'); const { id, deviceId } = state.route;
+  const item = state.conversations.find((entry) => entry.id === id && entry.deviceId === deviceId);
+  if (!item) {
+    if (cv.sig === 'missing') return; cv.sig = 'missing'; sv.id = null;
+    const box = el('div', 's-missing'); box.append(el('span', 'spark spark-lg'), el('h1', 'serif s-title', 'Conversation not found'), el('p', 's-note', 'It may have ended a while ago, or its device is offline.'));
+    const back = el('a', 'btn btn-ghost', 'New conversation'); back.href = '#/';
+    box.append(back); view.replaceChildren(box); setTopbarTitle('Conversation');
+    return;
+  }
+  const device = deviceById(item.deviceId); const name = item.deviceName || deviceName(item.deviceId);
+  const connection = activeSessionAt(item.deviceId, item.path); const status = conversationStatus(item);
+  const vm = {
+    title: conversationTitle(item), url: item.url, path: item.path, status, live: item.live, name, type: deviceType(device || { name }), online: online(device),
+    connection: connection ? { id: connection.id, label: statusOf(connection).label, mode: MODE_LABELS[connection.permissionMode] || MODE_LABELS.default, keep: !!connection.keepAlive, url: sessionReady(connection) ? connection.url : '' } : null,
+    started: item.startedAt || 0, updated: item.updatedAt || 0, ended: item.live ? 0 : (item.endedAt || 0)
+  };
+  const signature = JSON.stringify(vm); if (signature === cv.sig) return;
+  const first = !cv.sig.startsWith('{'); cv.sig = signature; sv.id = null;
+  setTopbarTitle(vm.title);
+
+  const head = el('div', 's-head'); const titles = el('div', 's-titles'); const meta = el('div', 's-meta');
+  const pill = el('span', `pill ${status.cls}`.trim()); pill.append(el('span', `dot ${status.cls}`.trim()), el('span', 'pill-label', status.label));
+  const where = el('span'); where.append(icon(vm.type), document.createTextNode(name));
+  const folder = el('span'); folder.append(icon('folder'), document.createTextNode(folderName(vm.path)));
+  meta.append(pill, where, folder);
+  const when = vm.ended || vm.updated; if (when) { const time = el('span'); time.append(icon('clock'), timeNode(new Date(when).toISOString(), vm.ended ? 'ended' : 'active')); meta.append(time); }
+  titles.append(el('h1', 'serif s-title', vm.title), meta); head.append(titles);
+  const path = el('code', 'code-block s-path', vm.path); path.title = vm.path;
+
+  const actions = el('div', 's-actions');
+  const open = el('a', `btn ${vm.live ? 'btn-primary' : 'btn-ghost'}`, 'Open in Claude'); open.href = vm.url; open.target = '_blank'; open.rel = 'noopener noreferrer'; withIcon(open, 'open');
+  const copy = el('button', 'btn btn-ghost', 'Copy link'); copy.type = 'button'; withIcon(copy, 'copy'); copy.addEventListener('click', () => copyLink(vm.url));
+  const fresh = el('button', `btn ${vm.live ? 'btn-ghost' : 'btn-primary'} grow-start`, 'New conversation here'); fresh.type = 'button'; withIcon(fresh, 'plus');
+  fresh.disabled = !vm.online || state.launching; fresh.addEventListener('click', () => newConversationIn(item));
+  actions.append(open, copy, fresh);
+
+  const parts = [head, path, actions];
+  if (!vm.online) parts.push(el('p', 's-note', `${name} is offline. The conversation is still in the Claude app, but you can't start a new one there until it's back.`));
+  if (vm.connection) {
+    const row = el('a', 's-conn'); row.href = `#/s/${vm.connection.id}`;
+    const text = el('span', 's-keep-label'); text.append(el('span', 's-keep-title', 'Connection to this folder'), el('span', 's-keep-hint', [vm.connection.label, vm.connection.mode, vm.connection.keep ? 'Restarts after reboot' : ''].filter(Boolean).join(' · ')));
+    row.append(text, icon('chevron')); parts.push(row);
+  }
+  const details = el('dl', 's-details');
+  const add = (label, value) => { if (value) details.append(el('dt', '', label), el('dd', '', value)); };
+  add('Device', `${name} (${deviceKind(device || { name })})`); add('Folder', vm.path);
+  if (vm.started) add('Started', fullTime(vm.started)); if (vm.ended) add('Ended', fullTime(vm.ended)); else if (vm.updated) add('Last activity', fullTime(vm.updated));
+  add('Link', vm.url); parts.push(details);
+  view.replaceChildren(...parts);
+  if (first && state.routed) enter(head, { y: 6 });
+}
+function newConversationIn(item) {
+  const connection = activeSessionAt(item.deviceId, item.path);
+  // A running connection opens a fresh conversation in the Claude app; otherwise start one first.
+  if (connection && sessionReady(connection)) { window.open(connection.url, '_blank', 'noopener'); return; }
+  if (connection) { navigate(`#/s/${connection.id}`); return; }
+  askLaunch({ deviceId: item.deviceId, path: item.path, permissionMode: modeFor(deviceById(item.deviceId)) });
 }
 
 /* ---------- session page ---------- */
@@ -1430,7 +1543,7 @@ const STAGES = {
       if (data.key !== 'end:stopped') { setText(refs.text, data.text); return; }
       if (refs.text._ts === data.stoppedAt) return;
       refs.text._ts = data.stoppedAt;
-      const parts = [document.createTextNode('You stopped this session')];
+      const parts = [document.createTextNode('You stopped this connection')];
       if (data.stoppedAt) parts.push(document.createTextNode(' '), timeNode(data.stoppedAt, 'ago'));
       parts.push(document.createTextNode('. Start it again to get a fresh link.'));
       refs.text.replaceChildren(...parts);
@@ -1556,7 +1669,7 @@ function renderSessionView() {
   setVisible(sv.refs.keep, !!vm.keep);
   if (vm.keep) {
     setAttr(sv.refs.keep, 'aria-checked', String(vm.keep.on));
-    setText(sv.refs.keepHint, vm.keep.on ? `If ${vm.keep.device} restarts, Anywhere starts Claude here again with the same permissions.` : `If ${vm.keep.device} restarts, this session ends until you start it again.`);
+    setText(sv.refs.keepHint, vm.keep.on ? `If ${vm.keep.device} restarts, Anywhere starts Claude here again with the same permissions.` : `If ${vm.keep.device} restarts, this connection ends until you start it again.`);
   }
   if (!first && vm.status.label !== sv.status) setText($('session-live'), `${vm.title}: ${vm.status.label}`);
   sv.status = vm.status.label;
