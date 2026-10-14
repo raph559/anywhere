@@ -149,11 +149,11 @@
 
   <dialog id="stop-dialog" class="dialog">
     <form method="dialog">
-      <h2 class="serif">Stop this connection?</h2>
+      <h2 class="serif" id="stop-title">Stop this connection?</h2>
       <p class="dialog-meta" id="stop-device"></p>
       <code id="stop-path" class="code-block"></code>
-      <p class="dialog-text">Claude will be shut down in this folder on that device, with every conversation running there. Your conversations stay in the Claude app. You can start it again later.</p>
-      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-danger" value="stop">Stop connection</button></div>
+      <p class="dialog-text" id="stop-text">Claude will be shut down in this folder on that device, with every conversation running there. Your conversations stay in the Claude app. You can start it again later.</p>
+      <div class="dialog-actions"><button class="btn btn-ghost" value="cancel">Cancel</button><button class="btn btn-danger" value="stop" id="stop-confirm">Stop connection</button></div>
     </form>
   </dialog>
 

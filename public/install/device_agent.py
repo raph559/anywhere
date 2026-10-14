@@ -28,8 +28,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = 8
-CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode", "permission-mode-auto", "conversations"]
+VERSION = 9
+CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode", "permission-mode-auto", "conversations", "stop-conversation"]
 PERMISSION_MODES = ("default", "acceptEdits", "auto", "bypassPermissions")
 # Only code signed with the matching private key (kept root-only on the hub server,
 # never readable by the web service) is installed by the self-updater. Each install
@@ -645,10 +645,12 @@ class DeviceAgent:
                 result = self.confirm(args)
             elif command.get("type") == "stop":
                 result = self.stop(args)
+            elif command.get("type") == "stop_conversation":
+                result = self.stop_conversation(args)
             elif command.get("type") == "status":
                 result = {"sessions": self.sessions(), "device": self.descriptor()}
             else:
-                raise AgentError("unsupported_command", "This device accepts only browse, launch, confirm, stop and status requests.")
+                raise AgentError("unsupported_command", "This device accepts only browse, launch, confirm, stop, stop_conversation and status requests.")
             response = {"id": cid, "ok": True, "result": result}
         except AgentError as exc:
             response = {"id": cid, "ok": False, "error": exc.public()}
@@ -669,6 +671,18 @@ class DeviceAgent:
         Ended conversations stay listed for a while from the agent's own history.
         """
         live = {}
+        for local_id, (info, identity, folder) in self.live_registry().items():
+            name = info.get("name") if isinstance(info.get("name"), str) else ""
+            status = info.get("status") if info.get("status") in ("busy", "idle", "waiting") else "idle"
+            def stamp(value):
+                return int(value) if isinstance(value, (int, float)) and value > 0 else None
+            live[local_id] = {"id": local_id, "url": f"https://claude.ai/code/{info['bridgeSessionId']}", "title": "".join(c for c in name if c.isprintable())[:120],
+                              "path": folder, "status": status, "startedAt": stamp(info.get("startedAt")), "updatedAt": stamp(info.get("updatedAt")), "live": True}
+        return self.remember_conversations(live)
+
+    def live_registry(self):
+        """Running conversations with an app link, verified against the OS (PID + start time) and the shared folders."""
+        found = {}
         try:
             entries = list((self.claude_dir() / "sessions").glob("*.json"))[:500]
         except OSError:
@@ -687,12 +701,22 @@ class DeviceAgent:
                 folder = str(self.policy.resolve(cwd))
             except AgentError:
                 continue
-            name = info.get("name") if isinstance(info.get("name"), str) else ""
-            status = info.get("status") if info.get("status") in ("busy", "idle", "waiting") else "idle"
-            def stamp(value):
-                return int(value) if isinstance(value, (int, float)) and value > 0 else None
-            live[local_id] = {"id": local_id, "url": f"https://claude.ai/code/{link_id}", "title": "".join(c for c in name if c.isprintable())[:120],
-                              "path": folder, "status": status, "startedAt": stamp(info.get("startedAt")), "updatedAt": stamp(info.get("updatedAt")), "live": True}
+            found[local_id] = (info, identity, folder)
+        return found
+
+    def stop_conversation(self, args):
+        cid = args.get("id")
+        if not isinstance(cid, str) or not ID_RE.fullmatch(cid):
+            raise AgentError("invalid_request", "Unknown conversation.")
+        entry = self.live_registry().get(cid)
+        if not entry:
+            return {"stopped": True, "alreadyEnded": True}
+        terminate_tree(entry[1])
+        if owned(entry[1]):
+            raise AgentError("stop_failed", "Claude is still running this conversation. Try again, or stop it on the device.")
+        return {"stopped": True}
+
+    def remember_conversations(self, live):
         now_ms = int(time.time() * 1000)
         history = self.conversation_history
         for key, item in live.items():

@@ -337,12 +337,14 @@ function statusOf(session) {
   return ({ starting: { cls: 'starting', label: 'Starting' }, stopped: { cls: '', label: 'Stopped' }, failed: { cls: 'failed', label: 'Failed' }, offline: { cls: '', label: 'Ended' } })[session.status] || { cls: '', label: 'Unknown' };
 }
 /* ---------- conversations (read from Claude's registry on each device) ---------- */
-function liveConversations() { return state.conversations.filter((item) => item.live).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); }
-function endedConversations() { return state.conversations.filter((item) => !item.live).sort((a, b) => (b.endedAt || b.updatedAt || 0) - (a.endedAt || a.updatedAt || 0)); }
+function shownConversations() { return state.conversations; }
+function liveConversations() { return shownConversations().filter((item) => item.live).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); }
+function endedConversations() { return shownConversations().filter((item) => !item.live).sort((a, b) => (b.endedAt || b.updatedAt || 0) - (a.endedAt || a.updatedAt || 0)); }
 function conversationHash(item) { return `#/c/${encodeURIComponent(item.deviceId)}/${encodeURIComponent(item.id)}`; }
 function conversationTitle(item) { return item.title || folderName(item.path); }
 function conversationStatus(item) {
   if (!item.live) return { cls: '', label: 'Ended' };
+  if (item.stopping) return { cls: 'stopping', label: 'Stopping…' };
   if (item.status === 'busy') return { cls: 'working', label: 'Working' };
   if (item.status === 'waiting') return { cls: 'attention', label: 'Waiting for you' };
   return { cls: 'ready', label: 'Idle' };
@@ -1153,9 +1155,36 @@ async function confirmNativeTrust(id, nonce) {
 }
 
 /* ---------- stop, remove, clear, share ---------- */
+const STOP_TEXT = {
+  connection: ['Stop this connection?', 'Claude will be shut down in this folder on that device, with every conversation running there. Your conversations stay in the Claude app. You can start it again later.', 'Stop connection'],
+  conversation: ['Stop this conversation?', 'Claude stops working on it on that device. Other conversations in this folder keep running, and this one stays in the Claude app.', 'Stop conversation']
+};
+function setStopDialog(kind) { const [title, text, button] = STOP_TEXT[kind]; setText($('stop-title'), title); setText($('stop-text'), text); setText($('stop-confirm'), button); }
+function askStopConversation(item) {
+  state.pendingStop = { kind: 'c', deviceId: item.deviceId, id: item.id };
+  setStopDialog('conversation');
+  setText($('stop-device'), `${conversationTitle(item)} · ${item.deviceName || deviceName(item.deviceId)}`);
+  setText($('stop-path'), item.path || '');
+  openDialog($('stop-dialog'));
+}
+async function stopConversation({ deviceId, id }) {
+  const item = state.conversations.find((entry) => entry.deviceId === deviceId && entry.id === id); if (!item) return;
+  const generation = state.authGeneration; item.stopping = true; item.stopError = ''; renderAll();
+  try {
+    await api(`/api/conversations/${encodeURIComponent(deviceId)}/${encodeURIComponent(id)}/stop`, { method: 'POST', body: {} });
+    // The device answers within a few seconds; check back until it reports the conversation ended.
+    for (const wait of [1500, 2500, 4000, 6000, 8000]) {
+      await new Promise((resolve) => setTimeout(resolve, wait)); if (!current(generation)) return;
+      await refreshConversations().catch(() => {});
+      const now = state.conversations.find((entry) => entry.deviceId === deviceId && entry.id === id);
+      if (!now || !now.live) { toast('Conversation stopped.'); return; }
+      if (now.stopError) { toast(now.stopError, { tone: 'error' }); return; }
+    }
+  } catch (error) { if (current(generation)) { item.stopping = false; toast(messageOf(error), { tone: 'error' }); renderAll(); } }
+}
 function askStop(id) {
   const session = findSession(id); if (!session) return;
-  state.pendingStop = session.id;
+  state.pendingStop = session.id; setStopDialog('connection');
   setText($('stop-device'), session.deviceName || deviceName(session.deviceId));
   setText($('stop-path'), session.path || '');
   openDialog($('stop-dialog'));
@@ -1283,12 +1312,12 @@ function createSideSession() {
   sub.append(el('span'), el('span'));
   main.append(el('span', 'side-item-title'), sub);
   item.append(main, el('span', 'dot'));
-  row.append(item, iconButton('pin', 'side-pin', 'Pin', () => togglePin(row._key)));
+  row.append(item, iconButton('pin', 'side-pin', 'Pin', () => (row._act ? row._act() : togglePin(row._key))));
   return row;
 }
 function sideKey(entry) { return `${entry.kind}:${entry.kind === 'c' ? `${entry.item.deviceId}/${entry.item.id}` : entry.item.id}`; }
 function updateSideEntry(row, entry, withDevice) {
-  setVisible(row.children[1], false);
+  setVisible(row.children[1], entry.kind === 'c' && entry.item.live && entry.item.canStop);
   if (entry.kind === 's') updateSideSession(row, entry.item, withDevice); else updateSideConversation(row, entry.item, withDevice);
 }
 function updateSideConversation(row, item, withDevice) {
@@ -1303,6 +1332,10 @@ function updateSideConversation(row, item, withDevice) {
   setAttr(time, 'data-ts', when ? new Date(when).toISOString() : null); setAttr(time, 'data-fmt', when ? 'dot-ago' : null);
   setText(time, when ? formatTime(new Date(when).toISOString(), 'dot-ago') : '');
   setClass(dot, `dot ${status.cls}`.trim());
+  const action = row.children[1]; const label = 'Stop this conversation';
+  if (action._icon !== 'stop') { action._icon = 'stop'; action.replaceChildren(icon('stop')); }
+  setClass(action, 'icon-btn xs side-pin'); setAttr(action, 'aria-label', label); setAttr(action, 'title', label); setProp(action, 'disabled', !!item.stopping);
+  row._act = () => askStopConversation(item);
 }
 function updateSideSession(row, session, withDevice) {
   const status = statusOf(session); const selected = state.route.id === session.id; const active = sessionActive(session);
@@ -1317,7 +1350,7 @@ function updateSideSession(row, session, withDevice) {
   setAttr(time, 'data-ts', when || null); setAttr(time, 'data-fmt', when ? 'dot-ago' : null);
   setText(time, when ? formatTime(when, 'dot-ago') : '');
   setClass(dot, `dot ${status.cls}`.trim());
-  setClass(pin, `icon-btn xs side-pin${session.pinned ? ' on' : ''}`);
+  row._act = null; setClass(pin, `icon-btn xs side-pin${session.pinned ? ' on' : ''}`);
   const label = session.pinned ? 'Unpin' : 'Pin to the top'; setAttr(pin, 'aria-label', label); setAttr(pin, 'title', label);
 }
 
@@ -1338,7 +1371,8 @@ function renderConversationView() {
   const vm = {
     title: conversationTitle(item), url: item.url, path: item.path, status, live: item.live, name, type: deviceType(device || { name }), online: online(device),
     connection: connection ? { id: connection.id, label: statusOf(connection).label, mode: MODE_LABELS[connection.permissionMode] || MODE_LABELS.default, keep: !!connection.keepAlive, stopping: !!connection.stopping, canStop: connection.canStop !== false && connection.deviceOnline !== false } : null,
-    started: item.startedAt || 0, updated: item.updatedAt || 0, ended: item.live ? 0 : (item.endedAt || 0)
+    started: item.startedAt || 0, updated: item.updatedAt || 0, ended: item.live ? 0 : (item.endedAt || 0),
+    stopping: !!item.stopping, canStop: !!item.canStop, stopError: item.stopError || ''
   };
   const signature = JSON.stringify(vm); if (signature === cv.sig) return;
   const first = !cv.sig.startsWith('{'); cv.sig = signature; sv.id = null;
@@ -1359,8 +1393,14 @@ function renderConversationView() {
   const fresh = el('button', `btn ${vm.live ? 'btn-ghost' : 'btn-primary'} grow-start`, 'New conversation here'); fresh.type = 'button'; withIcon(fresh, 'plus');
   fresh.disabled = !vm.online || state.launching; fresh.addEventListener('click', () => newConversationIn(item));
   actions.append(open, copy, fresh);
+  if (vm.live) {
+    const stop = el('button', 'btn btn-danger-ghost', vm.stopping ? 'Stopping…' : 'Stop'); stop.type = 'button'; withIcon(stop, 'stop');
+    stop.disabled = vm.stopping || !vm.canStop || !vm.online; stop.title = vm.canStop ? 'Stop this conversation' : 'This device\'s agent is updating; try again in a minute.';
+    stop.addEventListener('click', () => askStopConversation(item)); actions.append(stop);
+  }
 
   const parts = [head, path, actions];
+  if (vm.stopError) { const note = el('p', 's-note error', vm.stopError); note.setAttribute('role', 'alert'); parts.push(note); }
   if (!vm.online) parts.push(el('p', 's-note', `${name} is offline. The conversation is still in the Claude app, but you can't start a new one there until it's back.`));
   if (vm.connection) {
     // What Anywhere started in this folder: every conversation here runs inside it.
@@ -1921,7 +1961,7 @@ document.addEventListener('pointerdown', (event) => { if (modeMenuOpen() && !eve
 window.addEventListener('resize', () => closeModeMenu());
 window.addEventListener('scroll', (event) => { if (modeMenuOpen() && !event.target.closest?.('#mode-menu')) closeModeMenu(); }, true);
 $('trust-dialog').addEventListener('close', () => { const request = state.pendingLaunch; state.pendingLaunch = null; if ($('trust-dialog').returnValue === 'start') launch(request); });
-$('stop-dialog').addEventListener('close', () => { const id = state.pendingStop; state.pendingStop = null; if ($('stop-dialog').returnValue === 'stop' && id) stopSession(id); });
+$('stop-dialog').addEventListener('close', () => { const id = state.pendingStop; state.pendingStop = null; if ($('stop-dialog').returnValue !== 'stop' || !id) return; if (typeof id === 'object') stopConversation(id); else stopSession(id); });
 $('clear-history').addEventListener('click', clearHistory);
 $('add-device').addEventListener('click', openAddDevice);
 $('create-enrollment').addEventListener('click', createEnrollment);

@@ -23,6 +23,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
   if(!Array.isArray(state.enrolled))state.enrolled=[];if(!state.enrollCodes||typeof state.enrollCodes!=='object')state.enrollCodes={};
   for(const d of state.enrolled)if(!configured.has(d.id))configured.set(d.id,{...d,roots:[],defaultPath:'',enrolled:true});
   if(!state.conversations||typeof state.conversations!=='object'||Array.isArray(state.conversations))state.conversations={};
+  const conversationErrors=new Map();
   state.prefs={deviceOrder:Array.isArray(state.prefs?.deviceOrder)?state.prefs.deviceOrder:[],hiddenDevices:Array.isArray(state.prefs?.hiddenDevices)?state.prefs.hiddenDevices:[]};
   // Device order and visibility are shared by every signed-in browser.
   function orderedDevices(){const order=state.prefs.deviceOrder,rank=id=>{const i=order.indexOf(id);return i<0?order.length:i;};return [...configured.values()].map((d,i)=>[d,i]).sort((a,b)=>rank(a[0].id)-rank(b[0].id)||a[1]-b[1]).map(([d])=>({...deviceView(d),hidden:state.prefs.hiddenDevices.includes(d.id)}));}
@@ -98,7 +99,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
   }
   function conversationsView(){
     const out=[];
-    for(const d of configured.values()){const view=deviceView(d);for(const c of state.conversations[d.id]||[]){const live=c.live&&view.online;if(!live&&(c.endedAt||c.updatedAt||0)<=(state.conversationsClearedAt||0))continue;out.push({...c,live,status:live?c.status:'ended',deviceId:d.id,deviceName:d.name});}}
+    for(const d of configured.values()){const view=deviceView(d);for(const c of state.conversations[d.id]||[]){const live=c.live&&view.online;if((!live&&(c.endedAt||c.updatedAt||0)<=(state.conversationsClearedAt||0)))continue;out.push({...c,live,status:live?c.status:'ended',deviceId:d.id,deviceName:d.name,canStop:view.capabilities.includes('stop-conversation'),stopping:state.commands.some(x=>x.type==='stop_conversation'&&x.deviceId===d.id&&x.args.id===c.id),stopError:conversationErrors.get(`${d.id}/${c.id}`)||''});}}
     return out;
   }
   // "Restart after reboot": bring a session back when its device reports that Claude stopped without being asked to.
@@ -121,6 +122,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       const cmd=state.commands.find(c=>c.id===item.id&&c.deviceId===deviceId);ack.push(item.id);if(!cmd)continue;
       if(cmd.type==='browse'){const callback=pendingBrowse.get(cmd.id);if(callback){pendingBrowse.delete(cmd.id);callback(item);}}
       if(cmd.type==='stop'){const session=state.sessions.find(s=>s.id===cmd.args.sessionId&&s.deviceId===deviceId);if(session){if(item.ok){applySessionResult(session,item.result||{});if(ACTIVE.includes(session.status))session.stopError='Claude is still running on this device. Try again, or stop it on the device.';}else session.stopError=safeText(typeof item.error==='string'?item.error:item.error?.message||'Claude could not be stopped.',1200);session.updatedAt=clock();}}
+      if(cmd.type==='stop_conversation'){const key=`${deviceId}/${cmd.args.id}`;if(item.ok){conversationErrors.delete(key);const c=(state.conversations[deviceId]||[]).find(x=>x.id===cmd.args.id);if(c){c.live=false;c.status='ended';c.endedAt=clock();}}else conversationErrors.set(key,safeText(typeof item.error==='string'?item.error:item.error?.message||'Claude could not stop this conversation.',600));}
       if(cmd.type==='launch'||cmd.type==='confirm'){const session=state.sessions.find(s=>s.id===cmd.args.sessionId&&s.deviceId===deviceId);if(session){if(item.ok)applySessionResult(session,item.result||{});else{session.status='failed';session.error=safeText(typeof item.error==='string'?item.error:item.error?.message||'Claude could not start.',1200);session.updatedAt=clock();delete session.trustPending;delete session.confirmingNonce;}}}
       state.commands=state.commands.filter(c=>c.id!==cmd.id);
     }
@@ -161,6 +163,19 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
         if(route==='/api/logout'&&req.method==='POST'){const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith('anywhere_session='))?.slice(17);if(token)delete state.browserSessions[hash(token)];save(true);res.setHeader('Set-Cookie','anywhere_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');json(res,200,{ok:true});return;}
         if(route==='/api/devices'&&req.method==='GET'){json(res,200,{devices:orderedDevices()});return;}
         if(route==='/api/conversations'&&req.method==='GET'){json(res,200,{conversations:conversationsView()});return;}
+        const convMatch=route.match(/^\/api\/conversations\/([A-Za-z0-9_-]{1,80})\/([A-Za-z0-9_-]{8,80})(\/stop)$/);
+        if(convMatch){
+          const [,deviceId,id,stop]=convMatch;const device=configured.get(deviceId);if(!device){json(res,404,{error:'Unknown device'});return;}
+          const view=deviceView(device),c=(state.conversations[deviceId]||[]).find(x=>x.id===id);
+          if(stop&&req.method==='POST'){
+            if(!c){json(res,404,{error:'Conversation not found'});return;}
+            if(!view.online){json(res,409,{error:`${view.name} is offline, so Anywhere cannot reach it to stop this conversation.`});return;}
+            if(!view.capabilities.includes('stop-conversation')){json(res,409,{error:`The Anywhere agent on ${view.name} cannot stop conversations yet. It updates by itself within a minute; try again then.`});return;}
+            conversationErrors.delete(`${deviceId}/${id}`);
+            if(!state.commands.some(x=>x.type==='stop_conversation'&&x.deviceId===deviceId&&x.args.id===id))command(deviceId,'stop_conversation',{id});
+            json(res,202,{ok:true});return;
+          }
+        }
         if(route==='/api/enrollments'&&req.method==='POST'){
           const input=await body(req);const name=typeof input.name==='string'?input.name.replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,40):'';
           if(!name||!OSES.includes(input.os)){json(res,400,{error:'Give the device a name and pick its system.'});return;}
