@@ -693,13 +693,18 @@ function toggleDeviceHidden(id) {
 }
 async function patchSession(id, changes) {
   const session = findSession(id); if (!session) return;
-  const local = (value) => ({ ...(Object.hasOwn(value, 'label') ? { label: value.label || '' } : {}), ...(Object.hasOwn(value, 'pinned') ? { pinned: !!value.pinned } : {}) });
+  const local = (value) => ({ ...(Object.hasOwn(value, 'label') ? { label: value.label || '' } : {}), ...(Object.hasOwn(value, 'pinned') ? { pinned: !!value.pinned } : {}), ...(Object.hasOwn(value, 'keepAlive') ? { keepAlive: !!value.keepAlive } : {}) });
   upsertSession({ ...session, ...local(changes) });
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(id)}`, { method: 'PATCH', body: changes });
     const updated = normalizeSession(data.session || data);
     upsertSession({ ...updated, label: updated.label || '', pinned: !!updated.pinned });
   } catch (error) { toast(messageOf(error), { tone: 'error' }); refreshSessions().catch(() => {}); }
+}
+function toggleKeepAlive(id) {
+  const session = findSession(id); if (!session) return;
+  patchSession(id, { keepAlive: !session.keepAlive });
+  toast(session.keepAlive ? 'Won’t restart after a reboot.' : `Will restart after ${session.deviceName || 'the device'} reboots.`);
 }
 function togglePin(id) { const session = findSession(id); if (session) { patchSession(id, { pinned: !session.pinned }); toast(session.pinned ? 'Unpinned.' : 'Pinned to the top.'); } }
 
@@ -1007,7 +1012,7 @@ async function launch(request) {
   state.launchAttempts.set(attemptKey, requestId);
   state.launching = true; showError(''); updateLaunchButton();
   try {
-    const data = await api('/api/sessions', { method: 'POST', body: { deviceId: request.deviceId, path: request.path, permissionMode: request.permissionMode, trustConfirmed: true, requestId }, timeout: 60000 });
+    const data = await api('/api/sessions', { method: 'POST', body: { deviceId: request.deviceId, path: request.path, permissionMode: request.permissionMode, ...(request.keepAlive ? { keepAlive: true } : {}), trustConfirmed: true, requestId }, timeout: 60000 });
     if (!current(generation)) return;
     const session = normalizeSession(data.session || data);
     if (!session.id) throw new Error('The server did not return a session. Check the session list before trying again.');
@@ -1263,7 +1268,8 @@ function sessionModel(session) {
     title: sessionTitle(session), pinned: !!session.pinned, path: session.path || '', status, deviceName: name, deviceType: deviceType(device || { name }),
     mode, modeLabel: MODE_LABELS[mode], modeText: MODE_TEXT[mode],
     time: { fmt: ready ? 'for' : 'started', ts: started },
-    stage: { kind: 'none', key: 'none' }, actions: [], notes: [], details: []
+    stage: { kind: 'none', key: 'none' }, actions: [], notes: [], details: [],
+    keep: active || session.keepAlive ? { on: !!session.keepAlive, device: name } : null
   };
   if (session.stopping && active) vm.stage = { kind: 'stopping', key: 'stopping', text: `Stopping Claude on ${name}…` };
   else if (session.status === 'starting' || (ready && sv.witnessed)) vm.stage = launchModel(session, { name, prompt, issue, ready });
@@ -1293,6 +1299,7 @@ function sessionModel(session) {
 
   vm.details.push(['Device', `${name} (${deviceKind(device || { name })})`], ['Permissions', MODE_LABELS[mode]]);
   if (started) vm.details.push(['Started', fullTime(started)]);
+  if (session.restartedAt) vm.details.push(['Restarted', fullTime(session.restartedAt)]);
   if (session.stoppedAt) vm.details.push(['Stopped', fullTime(session.stoppedAt)]);
   if (ready) vm.details.push(['Link', session.url]);
   return vm;
@@ -1329,7 +1336,7 @@ function runAction(id) {
   else if (id === 'share') shareLink(session.id);
   else if (id === 'stop') askStop(session.id);
   else if (id === 'remove') removeSession(session.id);
-  else if (id === 'again') askLaunch({ deviceId: session.deviceId, path: session.path, permissionMode: session.permissionMode || 'default' });
+  else if (id === 'again') askLaunch({ deviceId: session.deviceId, path: session.path, permissionMode: session.permissionMode || 'default', keepAlive: !!session.keepAlive });
 }
 const ACTIONS_PART = {
   build(actions) {
@@ -1469,7 +1476,12 @@ function mountSession(session) {
   head.append(titles, tools);
   refs.path = el('code', 'code-block s-path');
   refs.stage = el('div'); refs.actions = el('div'); refs.notes = el('div'); refs.details = el('div');
-  $('session-view').replaceChildren(head, refs.path, refs.stage, refs.actions, refs.notes, refs.details);
+  refs.keep = el('button', 's-keep'); refs.keep.type = 'button'; refs.keep.setAttribute('role', 'switch');
+  refs.keepText = el('span', 's-keep-text'); refs.keepHint = el('span', 's-keep-hint');
+  const keepLabel = el('span', 's-keep-label'); keepLabel.append(el('span', 's-keep-title', 'Restart after reboot'), refs.keepHint);
+  refs.keep.append(keepLabel, el('span', 's-switch'));
+  refs.keep.addEventListener('click', () => toggleKeepAlive(sv.id));
+  $('session-view').replaceChildren(head, refs.path, refs.stage, refs.actions, refs.notes, refs.keep, refs.details);
   Object.assign(sv, { id: session.id, sig: '', witnessed: session.status === 'starting', status: '', hadOpen: false, refs, placeholder: '', renaming: false });
 }
 function patchHead(vm, first) {
@@ -1541,6 +1553,11 @@ function renderSessionView() {
   sv.hadOpen = hasOpen;
   renderSlot(sv.refs.notes, JSON.stringify(vm.notes), NOTES_PART, vm.notes, first);
   renderSlot(sv.refs.details, JSON.stringify(vm.details), DETAILS_PART, vm.details, true);
+  setVisible(sv.refs.keep, !!vm.keep);
+  if (vm.keep) {
+    setAttr(sv.refs.keep, 'aria-checked', String(vm.keep.on));
+    setText(sv.refs.keepHint, vm.keep.on ? `If ${vm.keep.device} restarts, Anywhere starts Claude here again with the same permissions.` : `If ${vm.keep.device} restarts, this session ends until you start it again.`);
+  }
   if (!first && vm.status.label !== sv.status) setText($('session-live'), `${vm.title}: ${vm.status.label}`);
   sv.status = vm.status.label;
 }

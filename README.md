@@ -36,6 +36,7 @@ Claude Code's [Remote Control](https://docs.claude.com/en/docs/claude-code) lets
 - 📂 **Browse folders** and start Claude where your project is.
 - ⏱️ **Watch it start live**, answer Claude's first questions (folder trust…) from your phone.
 - ⏹️ **Stop, restart, rename, pin** your sessions.
+- 🔁 **Restart after reboot**: a session can come back by itself when its machine restarts.
 - 🔐 **Choose permissions** per session: *Ask*, *Accept edits*, *Auto* or *Bypass permissions*.
 - 📱 **Installable app** for your phone's Home Screen, light and dark mode.
 

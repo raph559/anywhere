@@ -48,7 +48,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
   function newDeviceId(name){const base=(name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'device').slice(0,40);let id=base,n=2;while(configured.has(id)||Object.values(state.enrollCodes).some(e=>e.id===id))id=`${base}-${n++}`;return id;}
   function deviceView(d){const live=state.devices[d.id]||{};return {id:d.id,name:d.name,os:d.os,enrolled:!!d.enrolled,description:d.description||'',online:clock()-(live.lastSeen||0)<45000,lastSeen:live.lastSeen||null,roots:live.roots||d.roots||[],defaultPath:live.defaultPath||d.defaultPath||'',version:live.version||'',agentVersion:live.agentVersion||'',capabilities:live.capabilities||[],latestAgentVersion:latestAgentVersion()};}
   const ACTIVE=['ready','starting'],MODES=['default','acceptEdits','auto','bypassPermissions'];
-  function sessionView(s){const d=configured.get(s.deviceId),view=d?deviceView(d):null;const {requestId,...rest}=s;return {...rest,deviceName:d?.name||s.deviceId,deviceOnline:!!view?.online,canStop:!!view?.capabilities.includes('stop'),stopping:state.commands.some(c=>c.type==='stop'&&c.args.sessionId===s.id)};}
+  function sessionView(s){const d=configured.get(s.deviceId),view=d?deviceView(d):null;const {requestId,restarts,...rest}=s;return {...rest,deviceName:d?.name||s.deviceId,deviceOnline:!!view?.online,canStop:!!view?.capabilities.includes('stop'),stopping:state.commands.some(c=>c.type==='stop'&&c.args.sessionId===s.id)};}
   function command(deviceId,type,args){const item={id:randomUUID(),deviceId,type,args,createdAt:clock(),lastSent:0};state.commands.push(item);save(true);const wake=pollWaiters.get(deviceId);if(wake){pollWaiters.delete(deviceId);wake();}return item;}
   function readCommands(deviceId){const timestamp=clock();const list=state.commands.filter(c=>c.deviceId===deviceId&&(!c.lastSent||timestamp-c.lastSent>120000));for(const c of list)c.lastSent=timestamp;if(list.length)save();return list.map(({id,type,args})=>({id,type,args}));}
   function applySessionResult(s,result){
@@ -88,6 +88,14 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
     s.updatedAt=clock();
     if(s.status!=='starting'){delete s.trustPending;delete s.confirmingNonce;}
   }
+  // "Restart after reboot": bring a session back when its device reports that Claude stopped without being asked to.
+  function restartSession(s){
+    if(state.commands.some(c=>c.type==='launch'&&c.args.sessionId===s.id))return;
+    const recent=(s.restarts||[]).filter(t=>clock()-t<30*60*1000);
+    if(recent.length>=3){s.restarts=recent;s.error='Claude stopped again soon after restarting, so Anywhere stopped retrying. Start it again when the device is ready.';return;}
+    s.restarts=[...recent,clock()];s.status='starting';s.restartedAt=new Date(clock()).toISOString();delete s.error;delete s.url;delete s.sessionUrl;s.updatedAt=clock();
+    command(s.deviceId,'launch',{path:s.path,folderApproval:{path:s.path,approved:true},sessionId:s.id,...((s.permissionMode||'default')==='default'?{}:{permissionMode:s.permissionMode})});
+  }
   // While a session starts on a device, answer its long-poll quickly so status reaches the browser within seconds.
   const launchingOn=deviceId=>state.sessions.some(s=>s.deviceId===deviceId&&s.status==='starting');
   async function agentPoll(req,res,deviceId){
@@ -103,7 +111,9 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
       if(cmd.type==='launch'||cmd.type==='confirm'){const session=state.sessions.find(s=>s.id===cmd.args.sessionId&&s.deviceId===deviceId);if(session){if(item.ok)applySessionResult(session,item.result||{});else{session.status='failed';session.error=safeText(typeof item.error==='string'?item.error:item.error?.message||'Claude could not start.',1200);session.updatedAt=clock();delete session.trustPending;delete session.confirmingNonce;}}}
       state.commands=state.commands.filter(c=>c.id!==cmd.id);
     }
-    for(const update of Array.isArray(input.sessions)?input.sessions.slice(0,200):[]){const s=state.sessions.find(s=>s.deviceId===deviceId&&s.id===update.id);if(s)applySessionResult(s,update);}
+    // Only the newest session in a folder follows the device's report; older entries for that folder keep their final state.
+    const newest=new Map();for(const s of state.sessions)if(s.deviceId===deviceId)newest.set(s.path,s);
+    for(const update of Array.isArray(input.sessions)?input.sessions.slice(0,200):[]){const s=state.sessions.find(s=>s.deviceId===deviceId&&s.id===update.id);if(!s||newest.get(s.path)!==s)continue;const before=s.status;applySessionResult(s,update);if(s.keepAlive&&ACTIVE.includes(before)&&s.status==='offline')restartSession(s);}
     save();let commands=readCommands(deviceId);
     if(!commands.length&&!res.writableEnded&&!res.destroyed){await new Promise(resolveWait=>{let timer;const wake=()=>{clearTimeout(timer);res.off('close',wake);if(pollWaiters.get(deviceId)===wake)pollWaiters.delete(deviceId);resolveWait();};timer=setTimeout(wake,launchingOn(deviceId)?1500:15000);const old=pollWaiters.get(deviceId);if(old)old();pollWaiters.set(deviceId,wake);res.once('close',wake);});if(res.destroyed)return;commands=readCommands(deviceId);}
     json(res,200,{commands,acknowledged:ack,pollAfterMs:1000,agentVersion:latestAgentVersion()});
@@ -169,7 +179,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
           if(mode==='auto'&&!deviceView(device).capabilities.includes('permission-mode-auto')){json(res,409,{error:`The Anywhere agent on ${device.name} doesn't support Auto yet. It updates by itself within a minute; try again, or pick another permission.`});return;}
           const running=state.sessions.findLast(s=>s.deviceId===device.id&&s.path===input.path&&ACTIVE.includes(s.status));if(running){if((running.permissionMode||'default')!==mode){json(res,409,{error:'Claude is already running in this folder with other permissions. Stop it first, then start again.'});return;}json(res,200,{session:sessionView(running),reused:true});return;}
           if(state.sessions.filter(s=>s.deviceId===device.id&&s.status==='starting').length>=4){json(res,429,{error:'Wait for the other sessions to finish starting.'});return;}
-          const s={id:randomUUID(),requestId:input.requestId,deviceId:device.id,path:input.path,status:'starting',permissionMode:mode,createdAt:new Date(clock()).toISOString(),updatedAt:clock()};state.sessions.push(s);if(state.sessions.length>500)state.sessions=state.sessions.slice(-500);command(device.id,'launch',{path:input.path,folderApproval:{path:input.path,approved:true},sessionId:s.id,...(mode==='default'?{}:{permissionMode:mode})});json(res,202,{session:sessionView(s)});return;
+          const s={id:randomUUID(),requestId:input.requestId,deviceId:device.id,path:input.path,status:'starting',permissionMode:mode,...(input.keepAlive===true?{keepAlive:true}:{}),createdAt:new Date(clock()).toISOString(),updatedAt:clock()};state.sessions.push(s);if(state.sessions.length>500)state.sessions=state.sessions.slice(-500);command(device.id,'launch',{path:input.path,folderApproval:{path:input.path,approved:true},sessionId:s.id,...(mode==='default'?{}:{permissionMode:mode})});json(res,202,{session:sessionView(s)});return;
         }
         const confirmMatch=route.match(/^\/api\/sessions\/([a-zA-Z0-9-]+)\/confirm$/);
         if(confirmMatch&&req.method==='POST'){
@@ -202,6 +212,7 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
           const input=await body(req);
           if(Object.hasOwn(input,'label')){if(typeof input.label!=='string'){json(res,400,{error:'Invalid name.'});return;}const label=input.label.replace(/[\u0000-\u001f\u007f]/g,'').trim().slice(0,60);if(label)s.label=label;else delete s.label;}
           if(Object.hasOwn(input,'pinned')){if(input.pinned===true)s.pinned=true;else delete s.pinned;}
+          if(Object.hasOwn(input,'keepAlive')){if(input.keepAlive===true)s.keepAlive=true;else{delete s.keepAlive;delete s.restarts;}}
           save(true);json(res,200,{session:sessionView(s)});return;
         }
         if(sessionMatch&&req.method==='DELETE'){
