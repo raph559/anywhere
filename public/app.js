@@ -393,7 +393,7 @@ const current = (generation) => state.authenticated && generation === state.auth
 /* ---------- auth / boot ---------- */
 function showLogin() {
   state.authenticated = false; state.authGeneration++; state.csrf = '';
-  state.devices = []; state.sessions = []; state.devicesLoaded = false; state.sessionsLoaded = false;
+  state.devices = []; state.sessions = []; state.conversations = []; state.devicesLoaded = false; state.sessionsLoaded = false; state.conversationsLoaded = false;
   state.selected = null; state.directory = null; state.pendingLaunch = null; state.pendingStop = null; state.shownPath = '';
   state.launching = false; state.browsing = false; state.browseSequence++; state.routed = false;
   for (const timer of state.polls.values()) clearTimeout(timer);
@@ -451,7 +451,7 @@ async function openWorkspace() {
   updateGreeting();
   setVisible('boot-screen', false); setVisible('login-screen', false); setVisible('shell', true);
   route(); playIntro();
-  const results = await Promise.allSettled([refreshDevices(), refreshSessions()]);
+  const results = await Promise.allSettled([refreshDevices(), refreshSessions(), refreshConversations()]);
   if (!current(generation)) return;
   const failure = results.find((result) => result.status === 'rejected');
   if (failure) showError(messageOf(failure.reason));
@@ -1135,6 +1135,7 @@ async function refreshConversations() {
   const data = await api('/api/conversations');
   if (!current(generation)) return;
   state.conversations = (Array.isArray(data.conversations) ? data.conversations : []).filter((item) => item && safeClaudeUrl(item.url));
+  state.conversationsLoaded = true;
   renderAll();
 }
 function refreshAll() { return Promise.allSettled([refreshDevices(), refreshSessions(), refreshConversations()]); }
@@ -1359,6 +1360,12 @@ const cv = { sig: '' };
 function renderConversationView() {
   const view = $('session-view'); const { id, deviceId } = state.route;
   const item = state.conversations.find((entry) => entry.id === id && entry.deviceId === deviceId);
+  if (!item && !state.conversationsLoaded) {
+    if (cv.sig === 'loading') return; cv.sig = 'loading'; sv.id = null;
+    const box = el('div', 's-loading'); box.append(el('div', 's-skel s-skel-title'), el('div', 's-skel s-skel-meta'), el('div', 's-skel s-skel-block'));
+    view.replaceChildren(box); setTopbarTitle('Conversation');
+    return;
+  }
   if (!item) {
     if (cv.sig === 'missing') return; cv.sig = 'missing'; sv.id = null;
     const box = el('div', 's-missing'); box.append(el('span', 'spark spark-lg'), el('h1', 'serif s-title', 'Conversation not found'), el('p', 's-note', 'It may have ended a while ago, or its device is offline.'));
