@@ -28,7 +28,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-VERSION = 9
+VERSION = 10
 CAPABILITIES = ["browse", "launch", "confirm", "stop", "self-update", "permission-mode", "permission-mode-auto", "conversations", "stop-conversation"]
 PERMISSION_MODES = ("default", "acceptEdits", "auto", "bypassPermissions")
 # Only code signed with the matching private key (kept root-only on the hub server,
@@ -455,6 +455,13 @@ class DeviceAgent:
         self.commands = read_json(self.commands_file, {})
         self.mappings_file = self.state / "sessions.json"
         self.mappings = read_json(self.mappings_file, {})
+        # "launchMode": "tmux" starts each conversation as an interactive Claude in its own
+        # detached tmux session (socket "anywhere"), so local tools can attach to and resume it.
+        self.tmux = None
+        if self.config.get("launchMode") == "tmux":
+            if os.name == "nt" or not shutil.which("tmux"):
+                raise AgentError("configuration", "launchMode tmux needs Linux or WSL with tmux installed.")
+            self.tmux = shutil.which("tmux")
         self.conversations_file = self.state / "conversations.json"
         self.conversation_history = read_json(self.conversations_file, {})
         if not isinstance(self.conversation_history, dict):
@@ -487,7 +494,8 @@ class DeviceAgent:
             self.external_connections[session_key(path)] = dict(entry, path=str(path))
 
     def descriptor(self):
-        return {"label": self.label, "os": "windows" if os.name == "nt" else "linux", "roots": self.policy.roots, "defaultPath": self.default, "hostname": socket.gethostname(), "version": VERSION, "capabilities": CAPABILITIES}
+        capabilities = CAPABILITIES + (["conversation-launch"] if self.tmux else [])
+        return {"label": self.label, "os": "windows" if os.name == "nt" else "linux", "roots": self.policy.roots, "defaultPath": self.default, "hostname": socket.gethostname(), "version": VERSION, "capabilities": capabilities}
 
     def record(self, key):
         record = read_json(self.state / "brokers" / key / "process.json", {})
@@ -537,7 +545,8 @@ class DeviceAgent:
         mode = args.get("permissionMode", "default")
         if mode not in PERMISSION_MODES:
             raise AgentError("invalid_mode", "Unsupported permission mode.")
-        key = session_key(path)
+        # In tmux mode every launch is its own conversation; otherwise one connection per folder.
+        key = hashlib.sha256(f"tmux:{sid}".encode()).hexdigest() if self.tmux else session_key(path)
         folder = self.state / "brokers" / key
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         record = self.record(key)
@@ -551,7 +560,7 @@ class DeviceAgent:
                     raise AgentError("setup_required", "Install the Windows terminal dependency pywinpty before starting new folders.")
             # Capture the directory identity; broker checks it again before launch.
             stat = path.stat()
-            request = {"path": str(path), "folderApproval": args["folderApproval"], "deviceLabel": self.label, "executable": str(self.exe), "roots": self.policy.roots, "directoryIdentity": [stat.st_dev, stat.st_ino], "supportsNoChrome": self.config.get("supportsNoChrome", True), "permissionMode": mode, "approvedAt": now()}
+            request = {"path": str(path), "folderApproval": args["folderApproval"], "deviceLabel": self.label, "executable": str(self.exe), "roots": self.policy.roots, "directoryIdentity": [stat.st_dev, stat.st_ino], "supportsNoChrome": self.config.get("supportsNoChrome", True), "tmux": self.tmux, "claudeConfigDir": str(self.claude_dir()), "permissionMode": mode, "approvedAt": now()}
             atomic_json(folder / "request.json", request)
             with contextlib.suppress(FileNotFoundError):
                 (folder / "stop.json").unlink()
@@ -885,6 +894,114 @@ class DeviceAgent:
                     backoff = min(60, backoff * 2)
 
 
+TMUX_SOCKET = "anywhere"
+
+
+def tmux_conversation(request, path, folder, record):
+    """One interactive `claude --remote-control` in a detached tmux session.
+
+    The pane runs Claude itself (no shell in between), so tools that track Claude's
+    registry can find its tmux pane and resume it after a reboot.
+    """
+    mode = record["permissionMode"]
+    if mode not in PERMISSION_MODES:
+        raise AgentError("invalid_mode", "Unsupported permission mode.")
+    title = "".join(c for c in f"{request['deviceLabel']} · {path.name or str(path)}" if c.isprintable())[:120]
+    command = [request["executable"], "--remote-control", title, "--permission-mode", mode]
+    if request.get("supportsNoChrome", True):
+        command.append("--no-chrome")
+    name = "aw-" + secrets.token_hex(3)
+    env = dict(os.environ)
+    env.pop("TMUX", None)
+    def tmux(*args, check=True):
+        return subprocess.run([request["tmux"], "-L", TMUX_SOCKET, *args], capture_output=True, text=True, timeout=15, check=check, env=env)
+    try:
+        tmux("new-session", "-d", "-s", name, "-x", "200", "-y", "50", "-c", str(path), "--", *command)
+    except (OSError, subprocess.SubprocessError):
+        raise AgentError("launch_failed", "tmux could not start Claude on this device.")
+    record["tmux"] = {"socket": TMUX_SOCKET, "session": name}
+    screen = ""
+    try:
+        try:
+            pane = int(tmux("display-message", "-p", "-t", name, "#{pane_pid}").stdout.strip())
+        except (ValueError, OSError, subprocess.SubprocessError):
+            raise AgentError("launch_failed", "tmux started, but Claude's process could not be found.")
+        deadline = time.monotonic() + 2
+        record["child"] = process_identity(pane)
+        while record["child"] is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+            record["child"] = process_identity(pane)
+        if record["child"] is None:
+            raise AgentError("process_identity", "The new Claude process could not be verified.")
+        atomic_json(folder / "process.json", record)
+        registry = Path(request["claudeConfigDir"]) / "sessions" / f"{pane}.json"
+        deadline = time.monotonic() + 100
+        asked = False
+        while True:
+            if (folder / "stop.json").exists():
+                terminate_tree(record["child"])
+                record.update(status="stopped", trustPending=None)
+                record.pop("error", None)
+                return
+            if not owned(record["child"]):
+                if record["status"] == "starting":
+                    text = screen.lower()
+                    if mode == "bypassPermissions" and ("root" in text or "sudo" in text) and ("dangerously" in text or "bypass" in text):
+                        raise AgentError("bypass_refused", "Claude refuses Bypass permissions on this device (it runs as root). Use Auto, Accept edits or Ask here.")
+                    if any(word in text for word in ("login", "logged in", "authentication", "subscription")):
+                        raise AgentError("claude_authentication", "Sign in to Claude Code on this device, then retry.")
+                    raise AgentError("claude_exited", "Claude exited before connecting. Check its local launcher log.")
+                record.update(status="offline", error={"code": "process_stopped", "message": "Claude has stopped on this device."})
+                return
+            if record["status"] != "starting":
+                time.sleep(2)
+                continue
+            screen = tmux("capture-pane", "-p", "-J", "-t", name, check=False).stdout or screen
+            pending = record.get("trustPending")
+            if pending:
+                consent = read_json(folder / "consent.json", {})
+                if consent.get("approved") is True and consent.get("nonce") == pending["nonce"] and consent.get("path") == pending["path"]:
+                    # The dialog defaults to "No, exit": move to "Yes", check it is selected, then confirm.
+                    tmux("send-keys", "-t", name, "Down", check=False)
+                    time.sleep(0.4)
+                    if not re.search(r"❯\s*Yes, I trust this folder", tmux("capture-pane", "-p", "-J", "-t", name, check=False).stdout):
+                        raise AgentError("confirmation_failed", "Claude's trust prompt did not respond as expected. Nothing was approved.")
+                    tmux("send-keys", "-t", name, "Enter", check=False)
+                    record["trustPending"] = None
+                    deadline = time.monotonic() + 100
+                    atomic_json(folder / "process.json", record)
+            elif not asked and "Yes, I trust this folder" in screen:
+                shown = re.search(r"Accessing workspace:\s*\n\s*(.+)", screen)
+                if not shown or os.path.normcase(shown.group(1).strip()) != os.path.normcase(str(path)):
+                    raise AgentError("trust_path_mismatch", "Claude requested trust for a different folder. No approval was sent.")
+                asked = True
+                record["trustPending"] = {"kind": "folder", "path": str(path), "nonce": secrets.token_urlsafe(24),
+                                          "message": "Claude asks you to trust this folder. Sessions can read, edit and execute files here, and its project settings, hooks and MCP servers apply."}
+                deadline = time.monotonic() + 600
+                atomic_json(folder / "process.json", record)
+            info = read_json(registry, {})
+            link = info.get("bridgeSessionId") if isinstance(info, dict) else None
+            url = f"https://claude.ai/code/{link}" if isinstance(link, str) and re.fullmatch(r"session_[A-Za-z0-9]{8,64}", link) else None
+            if not url:
+                found = re.search(r"https://claude\.ai/code/session_[A-Za-z0-9]+", screen)
+                url = found.group(0) if found else None
+            if url:
+                record.update(status="ready", sessionUrl=url, environmentUrl=None, trustPending=None)
+                atomic_json(folder / "process.json", record)
+                continue
+            if time.monotonic() > deadline:
+                raise AgentError("setup_required", f"Claude is waiting for something on this device. Look at it with: tmux -L {TMUX_SOCKET} attach -t {name}")
+            time.sleep(0.5)
+    except AgentError:
+        # Only the session this broker just created is closed.
+        if owned(record.get("child")):
+            terminate_tree(record["child"])
+        tmux("kill-session", "-t", name, check=False)
+        with contextlib.suppress(OSError):
+            (folder / "claude.log").write_text(screen[-20000:], encoding="utf-8")
+        raise
+
+
 def run_broker(request_path):
     request_path = Path(request_path).resolve(strict=True)
     folder = request_path.parent
@@ -908,6 +1025,9 @@ def run_broker(request_path):
             (folder / "stop.json").unlink()
         atomic_json(folder / "process.json", record)
         record["permissionMode"] = request.get("permissionMode", "default")
+        if request.get("tmux"):
+            tmux_conversation(request, path, folder, record)
+            return 0 if record["status"] in ("offline", "stopped") else 1
         args = claude_args(request["executable"], request["deviceLabel"], path, request.get("supportsNoChrome", True), record["permissionMode"])
         env = dict(os.environ)
         env["TERM"] = "xterm-256color"

@@ -24,6 +24,8 @@ const MODE_TEXT = {
   acceptEdits: 'Accept edits: file edits go through without asking; commands still ask for your approval in Claude.',
   default: 'Ask: Claude asks for your approval in Claude before edits and commands.'
 };
+// tmux-mode devices start a separate interactive conversation for every Start.
+function perConversation(device) { return (device?.capabilities || []).includes('conversation-launch'); }
 function supportsModes(device) { return (device?.capabilities || []).includes('permission-mode'); }
 function modeFor(device, wanted = state.mode) {
   if (!supportsModes(device)) return 'default';
@@ -339,10 +341,13 @@ function statusOf(session) {
 /* ---------- conversations (read from Claude's registry on each device) ---------- */
 function shownConversations() { return state.conversations; }
 function liveConversations() { return shownConversations().filter((item) => item.live).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)); }
-function endedConversations() { return shownConversations().filter((item) => !item.live).sort((a, b) => (b.endedAt || b.updatedAt || 0) - (a.endedAt || a.updatedAt || 0)); }
+// Conversations on a device that stopped reporting stay listed under it, marked offline, until it's back.
+function listedConversations() { return shownConversations().filter((item) => item.live || item.deviceOffline).sort((a, b) => (b.live - a.live) || (b.updatedAt || 0) - (a.updatedAt || 0)); }
+function endedConversations() { return shownConversations().filter((item) => !item.live && !item.deviceOffline).sort((a, b) => (b.endedAt || b.updatedAt || 0) - (a.endedAt || a.updatedAt || 0)); }
 function conversationHash(item) { return `#/c/${encodeURIComponent(item.deviceId)}/${encodeURIComponent(item.id)}`; }
 function conversationTitle(item) { return item.title || folderName(item.path); }
 function conversationStatus(item) {
+  if (item.deviceOffline) return { cls: '', label: 'Device offline' };
   if (!item.live) return { cls: '', label: 'Ended' };
   if (item.stopping) return { cls: 'stopping', label: 'Stopping…' };
   if (item.status === 'busy') return { cls: 'working', label: 'Working' };
@@ -614,7 +619,7 @@ function createDeviceGroup(device) {
   return group;
 }
 function deviceItems(device) {
-  const conversations = liveConversations().filter((item) => item.deviceId === device.id).map((item) => ({ kind: 'c', item }));
+  const conversations = listedConversations().filter((item) => item.deviceId === device.id).map((item) => ({ kind: 'c', item }));
   // Claude running in a folder is plumbing; it only shows up while it starts, needs you, or just failed to start.
   const dayAgo = Date.now() - 86400000;
   const connections = visibleSessions().filter((session) => session.deviceId === device.id && (
@@ -921,7 +926,7 @@ function renderBreadcrumbs(path) {
 
 function updateLaunchButton() {
   const button = $('launch-button');
-  const running = state.selected && state.directory?.path ? activeSessionAt(state.selected.id, state.directory.path) : null;
+  const running = state.selected && state.directory?.path && !perConversation(state.selected) ? activeSessionAt(state.selected.id, state.directory.path) : null;
   const ready = !!state.selected && online(state.selected) && !!state.directory?.path && !state.browsing && !state.launching && navigator.onLine;
   setProp(button, 'disabled', running ? state.launching : !ready);
   button.classList.toggle('is-launching', state.launching);
@@ -1329,7 +1334,7 @@ function updateSideConversation(row, item, withDevice) {
   setAttr(link, 'aria-current', selected ? 'page' : null);
   setText(title, conversationTitle(item)); setAttr(title, 'title', item.path || null);
   setText(text, [withDevice ? item.deviceName || deviceName(item.deviceId) : folderName(item.path), status.label].join(' · '));
-  const when = item.live ? '' : (item.endedAt || item.updatedAt || '');
+  const when = item.live || item.deviceOffline ? '' : (item.endedAt || item.updatedAt || '');
   setAttr(time, 'data-ts', when ? new Date(when).toISOString() : null); setAttr(time, 'data-fmt', when ? 'dot-ago' : null);
   setText(time, when ? formatTime(new Date(when).toISOString(), 'dot-ago') : '');
   setClass(dot, `dot ${status.cls}`.trim());
@@ -1374,7 +1379,7 @@ function renderConversationView() {
     return;
   }
   const device = deviceById(item.deviceId); const name = item.deviceName || deviceName(item.deviceId);
-  const connection = activeSessionAt(item.deviceId, item.path); const status = conversationStatus(item);
+  const connection = perConversation(device) ? null : activeSessionAt(item.deviceId, item.path); const status = conversationStatus(item);
   const vm = {
     title: conversationTitle(item), url: item.url, path: item.path, status, live: item.live, name, type: deviceType(device || { name }), online: online(device),
     connection: connection ? { id: connection.id, label: statusOf(connection).label, mode: MODE_LABELS[connection.permissionMode] || MODE_LABELS.default, keep: !!connection.keepAlive, stopping: !!connection.stopping, canStop: connection.canStop !== false && connection.deviceOnline !== false } : null,
@@ -1431,7 +1436,7 @@ function renderConversationView() {
   if (first && state.routed) enter(head, { y: 6 });
 }
 function newConversationIn(item) {
-  const connection = activeSessionAt(item.deviceId, item.path);
+  const connection = perConversation(deviceById(item.deviceId)) ? null : activeSessionAt(item.deviceId, item.path);
   // A running connection opens a fresh conversation in the Claude app; otherwise start one first.
   if (connection && sessionReady(connection)) { window.open(connection.url, '_blank', 'noopener'); return; }
   if (connection) { navigate(`#/s/${connection.id}`); return; }
@@ -1455,7 +1460,7 @@ function sessionModel(session) {
     mode, modeLabel: MODE_LABELS[mode], modeText: MODE_TEXT[mode],
     time: { fmt: ready ? 'for' : 'started', ts: started },
     stage: { kind: 'none', key: 'none' }, actions: [], notes: [], details: [],
-    keep: active || session.keepAlive ? { on: !!session.keepAlive, device: name } : null
+    keep: (active || session.keepAlive) && !perConversation(device) ? { on: !!session.keepAlive, device: name } : null
   };
   if (session.stopping && active) vm.stage = { kind: 'stopping', key: 'stopping', text: `Stopping Claude on ${name}…` };
   else if (session.status === 'starting' || (ready && sv.witnessed)) vm.stage = launchModel(session, { name, prompt, issue, ready });
@@ -1882,7 +1887,7 @@ $('filter-form').addEventListener('submit', (event) => { event.preventDefault();
 $('toggle-hidden').addEventListener('click', () => { state.showHidden = !state.showHidden; writeFlag('anywhere-show-hidden', state.showHidden); if (state.directory) renderFolder(); });
 $('launch-button').addEventListener('click', () => {
   if ($('launch-button').disabled || !state.selected || !state.directory?.path) return;
-  const running = activeSessionAt(state.selected.id, state.directory.path);
+  const running = perConversation(state.selected) ? null : activeSessionAt(state.selected.id, state.directory.path);
   if (running) { navigate(`#/s/${running.id}`); return; }
   askLaunch({ deviceId: state.selected.id, path: state.directory.path, permissionMode: modeFor(state.selected) });
 });

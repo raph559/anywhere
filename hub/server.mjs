@@ -99,11 +99,12 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
   }
   function conversationsView(){
     const out=[];
-    for(const d of configured.values()){const view=deviceView(d);for(const c of state.conversations[d.id]||[]){const live=c.live&&view.online;if((!live&&(c.endedAt||c.updatedAt||0)<=(state.conversationsClearedAt||0)))continue;out.push({...c,live,status:live?c.status:'ended',deviceId:d.id,deviceName:d.name,canStop:view.capabilities.includes('stop-conversation'),stopping:state.commands.some(x=>x.type==='stop_conversation'&&x.deviceId===d.id&&x.args.id===c.id),stopError:conversationErrors.get(`${d.id}/${c.id}`)||''});}}
+    for(const d of configured.values()){const view=deviceView(d);for(const c of state.conversations[d.id]||[]){const live=c.live&&view.online,unreachable=c.live&&!view.online;if(!live&&!unreachable&&(c.endedAt||c.updatedAt||0)<=(state.conversationsClearedAt||0))continue;out.push({...c,live,deviceOffline:unreachable,status:live?c.status:unreachable?'offline':'ended',deviceId:d.id,deviceName:d.name,canStop:view.capabilities.includes('stop-conversation'),stopping:state.commands.some(x=>x.type==='stop_conversation'&&x.deviceId===d.id&&x.args.id===c.id),stopError:conversationErrors.get(`${d.id}/${c.id}`)||''});}}
     return out;
   }
   // "Restart after reboot": bring a session back when its device reports that Claude stopped without being asked to.
   function restartSession(s){
+    const d=configured.get(s.deviceId);if(d&&deviceView(d).capabilities.includes('conversation-launch'))return;
     if(state.commands.some(c=>c.type==='launch'&&c.args.sessionId===s.id))return;
     const recent=(s.restarts||[]).filter(t=>clock()-t<30*60*1000);
     if(recent.length>=3){s.restarts=recent;s.error='Claude stopped again soon after restarting, so Anywhere stopped retrying. Start it again when the device is ready.';return;}
@@ -207,7 +208,9 @@ export function createLauncher({config,statePath,publicDir=resolve(HERE,'../publ
           const mode=input.permissionMode===undefined?'default':input.permissionMode;if(!MODES.includes(mode)){json(res,400,{error:'Unknown permission mode.'});return;}
           if(mode!=='default'&&!deviceView(device).capabilities.includes('permission-mode')){json(res,409,{error:`The Anywhere agent on ${device.name} doesn't support permission choices yet. Use Ask, or update that agent.`});return;}
           if(mode==='auto'&&!deviceView(device).capabilities.includes('permission-mode-auto')){json(res,409,{error:`The Anywhere agent on ${device.name} doesn't support Auto yet. It updates by itself within a minute; try again, or pick another permission.`});return;}
-          const running=state.sessions.findLast(s=>s.deviceId===device.id&&s.path===input.path&&ACTIVE.includes(s.status));if(running){if((running.permissionMode||'default')!==mode){json(res,409,{error:'Claude is already running in this folder with other permissions. Stop it first, then start again.'});return;}json(res,200,{session:sessionView(running),reused:true});return;}
+          // Devices that launch one conversation per Start (tmux mode) never reuse a running folder.
+          const perConversation=deviceView(device).capabilities.includes('conversation-launch');
+          const running=!perConversation&&state.sessions.findLast(s=>s.deviceId===device.id&&s.path===input.path&&ACTIVE.includes(s.status));if(running){if((running.permissionMode||'default')!==mode){json(res,409,{error:'Claude is already running in this folder with other permissions. Stop it first, then start again.'});return;}json(res,200,{session:sessionView(running),reused:true});return;}
           if(state.sessions.filter(s=>s.deviceId===device.id&&s.status==='starting').length>=4){json(res,429,{error:'Wait for the other sessions to finish starting.'});return;}
           const s={id:randomUUID(),requestId:input.requestId,deviceId:device.id,path:input.path,status:'starting',permissionMode:mode,...(input.keepAlive===true?{keepAlive:true}:{}),createdAt:new Date(clock()).toISOString(),updatedAt:clock()};state.sessions.push(s);if(state.sessions.length>500)state.sessions=state.sessions.slice(-500);command(device.id,'launch',{path:input.path,folderApproval:{path:input.path,approved:true},sessionId:s.id,...(mode==='default'?{}:{permissionMode:mode})});json(res,202,{session:sessionView(s)});return;
         }

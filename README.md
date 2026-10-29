@@ -168,6 +168,14 @@ No. It's one option: the installer also supports a domain name with automatic HT
 </details>
 
 <details>
+<summary><b>Can conversations run in tmux, so I can attach to them on the machine?</b></summary>
+
+Yes, on Linux and WSL. Add `"launchMode": "tmux"` to that agent's `config.json` (next to `device_agent.py`) and restart the agent. Each Start then opens its own interactive `claude --remote-control "<device> · <folder>"` in a detached tmux session (socket `anywhere`, sessions named `aw-xxxxxx`): `tmux -L anywhere ls` lists them and `tmux -L anywhere attach -t aw-xxxxxx` opens one.
+
+What changes on that machine: every Start is a new conversation (several can run in the same folder), there is no shared environment to start new conversations from in the Claude app (start them from Anywhere instead), and *Restart after reboot* is not offered, so a tool on the machine can take care of resuming them.
+</details>
+
+<details>
 <summary><b>Manual setup / configuration reference</b></summary>
 
 - Hub configuration: `/etc/anywhere/config.json` — see [examples/hub-config.json](examples/hub-config.json). Devices listed there are managed by hand; devices added from the app are stored in `/var/lib/anywhere/state.json`.
